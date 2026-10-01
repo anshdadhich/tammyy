@@ -1,536 +1,519 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowRight, CircleAlert, Eye, EyeOff, Info, Loader2 } from "lucide-react";
-import { SESSION_EVENT, signOut } from "@/lib/session-client";
+import { useState } from "react";
 
-const EMAIL_OK = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const MAX_EMAIL_LEN = 320;
+type Stage = "signin" | "signup" | "company";
 
-type Session = {
-  email: string;
-  name?: string;
-  isAdmin?: boolean;
-  employerStatus?: "verified" | "pending" | "none";
+type ApiFailure = {
+  error?: unknown;
+  errors?: { fieldErrors?: Record<string, string[] | undefined> };
 };
 
-/** Flat success payload returned by POST /api/auth/{login,signup}. */
-type AuthSuccess = {
-  ok: true;
-  email: string;
-  kind: "hr" | "anon";
-  isAdmin: boolean;
-  name?: string;
-  employerStatus: "verified" | "pending" | "none";
-};
-
-function passwordPolicyError(password: string): string | null {
-  if (password.length < 8) return "Password must be at least 8 characters.";
-  if (password.length > 200) return "Password must be at most 200 characters.";
-  return null;
+function messageOf(json: ApiFailure, fallback: string): string {
+  if (typeof json.error === "string" && json.error.trim()) return json.error;
+  const fieldErrors = json.errors?.fieldErrors;
+  if (fieldErrors) {
+    for (const messages of Object.values(fieldErrors)) {
+      if (messages && messages[0]) return messages[0];
+    }
+  }
+  return fallback;
 }
 
-export default function LoginForm({
-  initialSession,
-  bare = false,
-}: {
-  initialSession: Session | null;
-  bare?: boolean;
-}) {
-  const router = useRouter();
-  const cardClass = bare
-    ? ""
-    : "rounded-2xl bg-surface shadow-soft-md p-7 sm:p-9";
+const eyeIcon = (
+  <svg
+    aria-hidden="true"
+    xmlns="http://www.w3.org/2000/svg"
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" />
+    <circle cx="12" cy="12" r="3" />
+  </svg>
+);
 
-  const [session, setSession] = useState<Session | null>(initialSession);
-  const [mode, setMode] = useState<"signin" | "signup">("signin");
+const arrowIcon = (
+  <svg
+    aria-hidden="true"
+    xmlns="http://www.w3.org/2000/svg"
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="M5 12h14" />
+    <path d="m12 5 7 7-7 7" />
+  </svg>
+);
+
+const infoIcon = (
+  <svg
+    aria-hidden="true"
+    xmlns="http://www.w3.org/2000/svg"
+    width="24"
+    height="24"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <circle cx="12" cy="12" r="10" />
+    <line x1="12" x2="12" y1="8" y2="12" />
+    <line x1="12" x2="12.01" y1="16" y2="16" />
+  </svg>
+);
+
+const passwordNotice = (
+  <span>
+    Your password is stored on this server only. Search, shortlists, and contact channels unlock
+    once your company is verified.
+  </span>
+);
+
+const searchWorksLink = (
+  <p className="field-hint mt-4">
+    Hiring for the first time?{" "}
+    <Link href="/hire" className="underline font-semibold text-body">
+      See how the search works
+    </Link>
+    .
+  </p>
+);
+
+export default function LoginForm({ initialStage = "signin" }: { initialStage?: "signin" | "company" }) {
+  const router = useRouter();
+  const [stage, setStage] = useState<Stage>(initialStage);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+  const [registered, setRegistered] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
-  const [showPw, setShowPw] = useState(false);
-  const [stage, setStage] = useState<"form" | "company">(
-    initialSession && !initialSession.isAdmin && initialSession.employerStatus !== "verified"
-      ? "company"
-      : "form",
-  );
-  const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [company, setCompany] = useState(initialSession?.name ?? "");
+  const [showPassword, setShowPassword] = useState(false);
+  const [companyName, setCompanyName] = useState("");
+  const [companyEmail, setCompanyEmail] = useState("");
   const [website, setWebsite] = useState("");
-  const [linkedin, setLinkedin] = useState("");
-  const [coBusy, setCoBusy] = useState(false);
-  const [coErr, setCoErr] = useState<string | null>(null);
-  const [coDone, setCoDone] = useState(initialSession?.employerStatus === "pending");
+  const [linkedinUrl, setLinkedinUrl] = useState("");
 
-  /** Branch on the flat auth payload: admin → /admin, verified → search,
-   *  pending → review card, everything else → company registration. */
-  const applySuccess = (data: AuthSuccess) => {
-    const next: Session = {
-      email: data.email,
-      ...(data.name ? { name: data.name } : {}),
-      ...(data.isAdmin ? { isAdmin: true } : {}),
-      employerStatus: data.employerStatus,
-    };
-    setSession(next);
-    setPassword("");
-    setConfirm("");
-    setErr(null);
-    window.dispatchEvent(new Event(SESSION_EVENT));
-    router.refresh();
-    if (data.isAdmin) {
-      router.push("/admin");
-      return;
-    }
-    if (data.kind === "hr" && data.employerStatus === "verified") {
+  function go(next: Stage) {
+    if (pending) return;
+    setError("");
+    setRegistered(false);
+    setStage(next);
+  }
+
+  async function post(path: string, payload: unknown) {
+    const res = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const json = await res.json().catch(() => ({}));
+    return { ok: res.ok, status: res.status, json };
+  }
+
+  async function onSignIn(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (pending) return;
+    setPending(true);
+    setError("");
+    try {
+      const { ok, json } = await post("/api/auth/login", { email, password });
+      if (!ok) {
+        setError(messageOf(json, "Something went wrong"));
+        return;
+      }
+      if (!json.isAdmin && json.employerStatus === "none") {
+        setStage("company");
+        router.refresh();
+        return;
+      }
       router.push("/hire/search");
-      return;
-    }
-    if (data.employerStatus === "pending") {
-      setCompany(data.name ?? "");
-      setCoDone(true);
-      return;
-    }
-    // hr with no company yet (or an unclaimed identity) → register one.
-    setStage("company");
-  };
-
-  const submitAuth = async (ev: React.FormEvent) => {
-    ev.preventDefault();
-    if (busy) return;
-    const trimmed = email.trim().toLowerCase();
-    if (trimmed.length > MAX_EMAIL_LEN || !EMAIL_OK.test(trimmed)) {
-      setErr("Enter a valid work email.");
-      return;
-    }
-    if (!password) {
-      setErr("Enter your password.");
-      return;
-    }
-    if (mode === "signup") {
-      const policy = passwordPolicyError(password);
-      if (policy) {
-        setErr(policy);
-        return;
-      }
-      if (password !== confirm) {
-        setErr("Passwords do not match.");
-        return;
-      }
-    }
-    setEmail(trimmed);
-    setErr(null);
-    setBusy(true);
-    try {
-      const res = await fetch(mode === "signup" ? "/api/auth/signup" : "/api/auth/login", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email: trimmed, password }),
-      });
-      const data = (await res.json().catch(() => null)) as
-        | (Partial<AuthSuccess> & { error?: unknown; code?: unknown })
-        | null;
-      if (res.status === 409 && data?.code === "exists") {
-        setMode("signin");
-        setConfirm("");
-        setErr("That email already has an account. Sign in instead.");
-        return;
-      }
-      if (!res.ok || !data?.ok || typeof data.email !== "string") {
-        setErr(
-          typeof data?.error === "string" && data.error
-            ? data.error
-            : "Could not sign in. Try again.",
-        );
-        return;
-      }
-      applySuccess(data as AuthSuccess);
-    } catch {
-      setErr("Network error - try again.");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const signOutNow = async () => {
-    await signOut();
-    setSession(null);
-    setMode("signin");
-    setStage("form");
-    setErr(null);
-    setEmail("");
-    setPassword("");
-    setConfirm("");
-    setCompany("");
-    setWebsite("");
-    setLinkedin("");
-    setCoErr(null);
-    setCoDone(false);
-    router.refresh();
-  };
-
-  const toggleMode = () => {
-    setMode((m) => (m === "signin" ? "signup" : "signin"));
-    setErr(null);
-    setConfirm("");
-  };
-
-  const registerCompany = async (ev: React.FormEvent) => {
-    ev.preventDefault();
-    const trimmed = company.trim();
-    if (trimmed.length < 2 || coBusy) return;
-    setCoBusy(true);
-    setCoErr(null);
-    try {
-      const res = await fetch("/api/employers", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          company_name: trimmed.slice(0, 200),
-          website: website.trim().slice(0, 500),
-          linkedin_url: linkedin.trim().slice(0, 500),
-        }),
-      });
-      const data = (await res.json().catch(() => null)) as {
-        employerId?: unknown;
-        status?: unknown;
-        error?: unknown;
-      } | null;
-      if (!res.ok) {
-        setCoErr(
-          typeof data?.error === "string" && data.error
-            ? data.error
-            : "Could not register the company. Try again.",
-        );
-        return;
-      }
-      setSession((s) =>
-        s ? { ...s, name: trimmed, employerStatus: "pending" } : s,
-      );
-      setCoDone(true);
-      window.dispatchEvent(new Event(SESSION_EVENT));
       router.refresh();
     } catch {
-      setCoErr("Network error - try again.");
+      setError("Network error");
     } finally {
-      setCoBusy(false);
+      setPending(false);
     }
-  };
+  }
 
-  if (session && stage === "company" && !coDone) {
+  async function onSignUp(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (pending) return;
+    if (password !== confirm) {
+      setError("Passwords don't match.");
+      return;
+    }
+    setPending(true);
+    setError("");
+    try {
+      const { ok, status, json } = await post("/api/auth/signup", { email, password });
+      if (!ok) {
+        const message = messageOf(json, "Something went wrong");
+        if (status === 409 && json.code === "exists") {
+          setStage("signin");
+          setError(message);
+          return;
+        }
+        setError(message);
+        return;
+      }
+      setStage("company");
+      router.refresh();
+    } catch {
+      setError("Network error");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function onRegister(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (pending) return;
+    const trimmedEmail = companyEmail.trim();
+    setPending(true);
+    setError("");
+    try {
+      const { ok, json } = await post("/api/employers", {
+        company_name: companyName.trim(),
+        website: website.trim(),
+        linkedin_url: linkedinUrl.trim(),
+        ...(trimmedEmail ? { company_email: trimmedEmail } : {}),
+      });
+      if (!ok) {
+        setError(messageOf(json, "Something went wrong"));
+        return;
+      }
+      router.refresh();
+      if (json.status === "verified") {
+        router.push("/hire/search");
+        return;
+      }
+      setRegistered(true);
+    } catch {
+      setError("Network error");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  const errorSlot = error ? (
+    <p className="field-error mt-4" aria-live="polite">
+      {error}
+    </p>
+  ) : null;
+
+  if (registered) {
     return (
-      <form onSubmit={(ev) => void registerCompany(ev)} className={cardClass}>
+      <div>
+        <div className="notice">
+          {infoIcon}
+          <span>
+            <span className="notice-ok">Company registered, verification pending.</span> Search,
+            shortlists, and contact channels unlock once your company is verified.
+          </span>
+        </div>
+        <Link href="/hire" className="btn btn-secondary press mt-6">
+          Back to hiring overview
+        </Link>
+      </div>
+    );
+  }
+
+  if (stage === "signup") {
+    return (
+      <form onSubmit={onSignUp}>
         <div className="grid gap-4">
           <div className="field">
-            <label className="field-label" htmlFor="hr-company">
-              Company name
-              <span className="req" aria-hidden="true">
-                *
-              </span>
+            <label className="field-label" htmlFor="hr-signup-email">
+              Work email <span className="req" aria-hidden="true">*</span>
             </label>
             <input
-              id="hr-company"
+              id="hr-signup-email"
               className="input"
-              value={company}
-              onChange={(e) => {
-                setCompany(e.target.value);
-                setCoErr(null);
-              }}
-              placeholder="Acme Inc"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@company.com"
+              autoComplete="email"
+              maxLength={320}
+              required
+            />
+          </div>
+          <div className="field">
+            <label className="field-label" htmlFor="hr-signup-password">
+              Password <span className="req" aria-hidden="true">*</span>
+            </label>
+            <div className="relative">
+              <input
+                id="hr-signup-password"
+                className="input pr-11"
+                type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Your password"
+                autoComplete="new-password"
+                maxLength={200}
+                required
+              />
+              <button
+                type="button"
+                className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-muted hover:text-body"
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                tabIndex={-1}
+                onClick={() => setShowPassword((v) => !v)}
+              >
+                {eyeIcon}
+              </button>
+            </div>
+            <span className="field-hint">Use at least 8 characters.</span>
+          </div>
+          <div className="field">
+            <label className="field-label" htmlFor="hr-confirm-password">
+              Confirm password <span className="req" aria-hidden="true">*</span>
+            </label>
+            <input
+              id="hr-confirm-password"
+              className="input"
+              type={showPassword ? "text" : "password"}
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+              placeholder="Re-enter your password"
+              autoComplete="new-password"
               maxLength={200}
-              aria-invalid={coErr ? true : undefined}
               required
             />
-            {coErr ? (
-              <span className="field-error" role="alert">
-                {coErr}
-              </span>
-            ) : (
-              <span className="field-hint">
-                No company on file for {session.email} yet. Register it for verification.
-              </span>
-            )}
-          </div>
-          <div className="field">
-            <label className="field-label" htmlFor="hr-website">
-              Company website
-              <span className="req" aria-hidden="true">
-                *
-              </span>
-            </label>
-            <input
-              id="hr-website"
-              className="input"
-              value={website}
-              onChange={(e) => {
-                setWebsite(e.target.value);
-                setCoErr(null);
-              }}
-              placeholder="https://acme.com"
-              inputMode="url"
-              maxLength={500}
-              required
-            />
-          </div>
-          <div className="field">
-            <label className="field-label" htmlFor="hr-linkedin">
-              Your LinkedIn URL
-              <span className="req" aria-hidden="true">
-                *
-              </span>
-            </label>
-            <input
-              id="hr-linkedin"
-              className="input"
-              value={linkedin}
-              onChange={(e) => {
-                setLinkedin(e.target.value);
-                setCoErr(null);
-              }}
-              placeholder="https://linkedin.com/in/you"
-              inputMode="url"
-              maxLength={500}
-              required
-            />
-            <span className="field-hint">
-              Used to confirm you work at this company.
-            </span>
+            <span className="field-hint">Both passwords must match.</span>
           </div>
         </div>
+
+        {errorSlot}
+
         <button
           type="submit"
           className="btn btn-primary press mt-6 w-full sm:w-auto"
-          disabled={coBusy}
+          disabled={pending}
         >
-          {coBusy ? (
-            <Loader2 size={16} className="animate-spin" aria-hidden="true" />
-          ) : null}
-          Register company <ArrowRight size={16} aria-hidden="true" />
+          {pending ? "Creating account…" : "Create account"} {arrowIcon}
         </button>
+
+        <p className="field-hint mt-4">
+          Already have an account?{" "}
+          <button
+            type="button"
+            className="underline font-semibold text-body"
+            onClick={() => go("signin")}
+          >
+            Sign in
+          </button>
+        </p>
+
+        <div className="notice mt-6">
+          {infoIcon}
+          {passwordNotice}
+        </div>
+
+        {searchWorksLink}
       </form>
     );
   }
 
-  if (session && coDone) {
+  if (stage === "company") {
     return (
-      <div className={cardClass}>
-        <div className="flex items-center gap-2.5">
-          <span
-            className="pulse-dot inline-block w-2 h-2 rounded-full"
-            style={{ background: "var(--warn)" }}
-            aria-hidden="true"
-          />
-          <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">
-            Verification pending
-          </p>
+      <form onSubmit={onRegister}>
+        <div className="grid gap-4">
+          <div className="field">
+            <label className="field-label" htmlFor="co-name">
+              Company name <span className="req" aria-hidden="true">*</span>
+            </label>
+            <input
+              id="co-name"
+              className="input"
+              type="text"
+              value={companyName}
+              onChange={(e) => setCompanyName(e.target.value)}
+              placeholder="Acme Inc."
+              maxLength={200}
+              required
+            />
+          </div>
+          <div className="field">
+            <label className="field-label" htmlFor="co-email">
+              Company email
+            </label>
+            <input
+              id="co-email"
+              className="input"
+              type="email"
+              value={companyEmail}
+              onChange={(e) => setCompanyEmail(e.target.value)}
+              placeholder="you@company.com"
+              autoComplete="email"
+              maxLength={320}
+            />
+            <span className="field-hint">Optional - it falls back to your sign-in email.</span>
+          </div>
+          <div className="field">
+            <label className="field-label" htmlFor="co-website">
+              Company website <span className="req" aria-hidden="true">*</span>
+            </label>
+            <input
+              id="co-website"
+              className="input"
+              type="url"
+              value={website}
+              onChange={(e) => setWebsite(e.target.value)}
+              placeholder="https://company.com"
+              maxLength={500}
+              required
+            />
+            <span className="field-hint">Use the full URL, starting with https.</span>
+          </div>
+          <div className="field">
+            <label className="field-label" htmlFor="co-linkedin">
+              LinkedIn page <span className="req" aria-hidden="true">*</span>
+            </label>
+            <input
+              id="co-linkedin"
+              className="input"
+              type="url"
+              value={linkedinUrl}
+              onChange={(e) => setLinkedinUrl(e.target.value)}
+              placeholder="https://www.linkedin.com/company/acme"
+              maxLength={500}
+              required
+            />
+            <span className="field-hint">Company or profile URL on linkedin.com.</span>
+          </div>
         </div>
-        <h2 className="mt-3 text-[22px] font-semibold tracking-[-0.01em] text-ink">
-          Company submitted
-        </h2>
-        <p className="mt-2 text-[15px] leading-[1.6] text-body">
-          An admin will verify {company.trim() || "your company"} shortly. Search unlocks
-          once verification completes.
-        </p>
-        <div className="flex flex-wrap items-center gap-3 mt-6">
-          <button
-            type="button"
-            className="btn btn-secondary press"
-            onClick={() => void signOutNow()}
-            disabled={busy}
-          >
-            Sign out
-          </button>
-        </div>
-      </div>
-    );
-  }
 
-  if (session) {
-    const heading = session.isAdmin
-      ? "Signed in as Admin"
-      : `Signed in as ${session.name || session.email}`;
-    return (
-      <div className={cardClass}>
-        <div className="flex items-center gap-2.5">
-          <span
-            className="pulse-dot inline-block w-2 h-2 rounded-full"
-            style={{ background: "var(--success)" }}
-            aria-hidden="true"
-          />
-          <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">
-            Session open
-          </p>
-        </div>
-        <h2 className="mt-3 text-[22px] font-semibold tracking-[-0.01em] text-ink">
-          {heading}
-        </h2>
-        <p className="mt-2 text-[15px] leading-[1.6] text-body">
-          {session.name && !session.isAdmin ? session.email : "This device holds the employer session."}{" "}
-          Search, shortlists, and contact channels are unlocked.
-        </p>
-        <div className="flex flex-wrap items-center gap-3 mt-6">
-          {session.isAdmin ? (
-            <Link href="/admin" className="btn btn-primary press">
-              Open admin <ArrowRight size={16} aria-hidden="true" />
-            </Link>
-          ) : (
-            <Link href="/hire/search" className="btn btn-primary press">
-              Start a search <ArrowRight size={16} aria-hidden="true" />
-            </Link>
-          )}
+        {errorSlot}
+
+        <button
+          type="submit"
+          className="btn btn-primary press mt-6 w-full sm:w-auto"
+          disabled={pending}
+        >
+          {pending ? "Registering…" : "Register company"} {arrowIcon}
+        </button>
+
+        <p className="field-hint mt-4">
+          Already have an account?{" "}
           <button
             type="button"
-            className="btn btn-secondary press"
-            onClick={() => void signOutNow()}
-            disabled={busy}
+            className="underline font-semibold text-body"
+            onClick={() => go("signin")}
           >
-            Sign out
+            Sign in
           </button>
-        </div>
+        </p>
+
         <div className="notice mt-6">
-          <Info aria-hidden="true" />
-          <span>
-            The session lives in a signed-in browser tab on this device. Use
-            sign out to end it.
-          </span>
+          {infoIcon}
+          <span>Search, shortlists, and contact channels unlock once your company is verified.</span>
         </div>
-      </div>
+
+        {searchWorksLink}
+      </form>
     );
   }
 
-  const isSignup = mode === "signup";
   return (
-    <form onSubmit={(ev) => void submitAuth(ev)} className={cardClass}>
+    <form onSubmit={onSignIn}>
       <div className="grid gap-4">
         <div className="field">
           <label className="field-label" htmlFor="hr-email">
-            Work email
-            <span className="req" aria-hidden="true">
-              *
-            </span>
+            Work email <span className="req" aria-hidden="true">*</span>
           </label>
           <input
             id="hr-email"
             className="input"
             type="email"
             value={email}
-            onChange={(e) => {
-              setEmail(e.target.value);
-              setErr(null);
-            }}
+            onChange={(e) => setEmail(e.target.value)}
             placeholder="you@company.com"
             autoComplete="email"
-            maxLength={MAX_EMAIL_LEN}
+            maxLength={320}
             required
           />
         </div>
         <div className="field">
           <label className="field-label" htmlFor="hr-password">
-            Password
-            <span className="req" aria-hidden="true">
-              *
-            </span>
+            Password <span className="req" aria-hidden="true">*</span>
           </label>
           <div className="relative">
             <input
               id="hr-password"
               className="input pr-11"
-              type={showPw ? "text" : "password"}
+              type={showPassword ? "text" : "password"}
               value={password}
-              onChange={(e) => {
-                setPassword(e.target.value);
-                setErr(null);
-              }}
-              placeholder={isSignup ? "At least 8 characters" : "Your password"}
-              autoComplete={isSignup ? "new-password" : "current-password"}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Your password"
+              autoComplete="current-password"
               maxLength={200}
-              aria-invalid={err ? true : undefined}
               required
             />
             <button
               type="button"
               className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-muted hover:text-body"
-              onClick={() => setShowPw((v) => !v)}
-              aria-label={showPw ? "Hide password" : "Show password"}
+              aria-label={showPassword ? "Hide password" : "Show password"}
               tabIndex={-1}
+              onClick={() => setShowPassword((v) => !v)}
             >
-              {showPw ? <EyeOff size={16} /> : <Eye size={16} />}
+              {eyeIcon}
             </button>
           </div>
-          {!isSignup && !err ? (
-            <span className="field-hint">Use the password for this account.</span>
-          ) : null}
+          <span className="field-hint">Use the password for this account.</span>
         </div>
-        {isSignup ? (
-          <div className="field">
-            <label className="field-label" htmlFor="hr-confirm">
-              Confirm password
-              <span className="req" aria-hidden="true">
-                *
-              </span>
-            </label>
-            <input
-              id="hr-confirm"
-              className="input"
-              type={showPw ? "text" : "password"}
-              value={confirm}
-              onChange={(e) => {
-                setConfirm(e.target.value);
-                setErr(null);
-              }}
-              placeholder="Repeat the password"
-              autoComplete="new-password"
-              maxLength={200}
-              required
-            />
-          </div>
-        ) : null}
       </div>
 
-      {err ? (
-        <p className="field-error mt-4" role="alert">
-          {err}
-        </p>
-      ) : null}
+      {errorSlot}
 
-      <button
-        type="submit"
-        className="btn btn-primary press mt-6 w-full sm:w-auto"
-        disabled={busy}
-      >
-        {busy ? (
-          <Loader2 size={16} className="animate-spin" aria-hidden="true" />
-        ) : null}
-        {isSignup ? "Create account" : "Sign in"} <ArrowRight size={16} aria-hidden="true" />
+      <button type="submit" className="btn btn-primary press mt-6 w-full sm:w-auto" disabled={pending}>
+        {pending ? "Signing in…" : "Sign in"} {arrowIcon}
       </button>
 
       <p className="field-hint mt-4">
-        {isSignup ? "Already have an account?" : "New to hiring on Tammy?"}{" "}
+        New to hiring on Tammy?{" "}
         <button
           type="button"
           className="underline font-semibold text-body"
-          onClick={toggleMode}
-          disabled={busy}
+          onClick={() => go("signup")}
         >
-          {isSignup ? "Sign in instead" : "Create an account"}
+          Create an account
         </button>
       </p>
 
       <div className="notice mt-6">
-        <CircleAlert aria-hidden="true" />
-        <span>
-          Your password is stored on this server only. Search, shortlists, and
-          contact channels unlock once your company is verified.
-        </span>
+        {infoIcon}
+        {passwordNotice}
       </div>
 
+      {searchWorksLink}
+
       <p className="field-hint mt-4">
-        Hiring for the first time?{" "}
-        <Link href="/hire" className="underline font-semibold text-body">
-          See how the search works
-        </Link>
-        .
+        Hiring as a company?{" "}
+        <button
+          type="button"
+          className="underline font-semibold text-body"
+          onClick={() => go("company")}
+        >
+          Register your company
+        </button>
       </p>
     </form>
   );

@@ -1,20 +1,22 @@
+import { notFound } from "next/navigation";
 import PageShell from "@/components/PageShell";
-import { AuthError, requireRole } from "@/lib/auth";
-import { listAdminEmployers } from "@/lib/admin-employers";
+import { listAdminEmployers, type AdminEmployer } from "@/lib/admin-employers";
+import { readNavViewer } from "@/lib/hr-session";
 import AdminEmployers from "./admin-employers";
 
 export default async function AdminPage() {
-  let allowed = false;
-  let initialEmployers: Awaited<ReturnType<typeof listAdminEmployers>> = [];
+  const viewer = await readNavViewer();
+  if (!viewer?.isAdmin) notFound();
+
+  let initialEmployers: AdminEmployer[] = [];
   try {
-    await requireRole("admin");
-    allowed = true;
-  } catch (e) {
-    if (!(e instanceof AuthError)) throw e;
+    initialEmployers = await listAdminEmployers("pending");
+  } catch {
+    console.error("[admin] initial employer list failed");
   }
-  if (allowed) initialEmployers = await listAdminEmployers("pending", 100);
+
   return (
-    <PageShell>
+    <PageShell variant="landing" active="/#candidates" viewer={viewer}>
       <section className="pt-20 lg:pt-28 pb-24">
         <div className="max-w-[1160px] mx-auto px-6">
           <p className="meta-chip">Admin</p>
@@ -25,13 +27,7 @@ export default async function AdminPage() {
             Companies await approval here, oldest first. Verified employers unlock search.
           </p>
           <div className="mt-8">
-            {allowed ? (
-              <AdminEmployers initialRows={initialEmployers} />
-            ) : (
-              <p className="empty-note">
-                Not authorized. Sign in with an admin account to review employers.
-              </p>
-            )}
+            <AdminEmployers initialEmployers={initialEmployers} />
           </div>
         </div>
       </section>

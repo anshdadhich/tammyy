@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
+import DitherCanvas from "@/components/DitherCanvas";
 import PageShell from "@/components/PageShell";
-import DitherEffect from "@/components/DitherEffect";
 import JoinWizard from "./join-wizard";
 
 export const metadata: Metadata = {
@@ -9,24 +9,16 @@ export const metadata: Metadata = {
     "Seven steps - basics, profile, experience, projects, background, private, review. Drafts autosave, and you review everything before your profile enters employer searches.",
 };
 
-export default function JoinPage() {
+export default async function JoinPage() {
   return (
-    <PageShell>
+    <PageShell variant="join" active="/join">
       <h1 className="sr-only">Build your page</h1>
       <section className="join-bleed relative overflow-hidden pt-12 lg:pt-16 pb-24">
         <div className="bg-dither" aria-hidden="true">
-          <DitherEffect
-            colorFront="#1F2DE6"
-            colorBack="#ffffff"
-            scale={0.8}
-            className="dither-soft"
-          />
+          <DitherCanvas />
         </div>
         <div className="relative max-w-[1160px] mx-auto px-6">
-          <div
-            className="rise max-w-4xl mx-auto"
-            style={{ "--d": "60ms" } as React.CSSProperties}
-          >
+          <div className="rise max-w-4xl mx-auto" style={{ "--d": "60ms" } as React.CSSProperties}>
             <JoinWizard />
           </div>
         </div>

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import DitherEffect from "@/components/DitherEffect";
+import DitherCanvas from "@/components/DitherCanvas";
 
 export default function SiteFooter() {
   return (
@@ -8,7 +8,7 @@ export default function SiteFooter() {
         <div className="footer-simple-frame">
           <div className="footer-simple-blue">
             <div className="footer-simple-dither" aria-hidden="true">
-              <DitherEffect colorFront="#1F2DE6" colorBack="#ffffff" scale={0.8} className="dither-soft" />
+              <DitherCanvas />
             </div>
             <div className="footer-simple-card">
               <div className="footer-simple-grid">

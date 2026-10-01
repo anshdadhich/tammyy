@@ -1,28 +1,25 @@
 import type { Metadata } from "next";
+import { redirect } from "next/navigation";
+import DitherCanvas from "@/components/DitherCanvas";
 import PageShell from "@/components/PageShell";
-import DitherEffect from "@/components/DitherEffect";
 import { readHrSession } from "@/lib/hr-session";
 import LoginForm from "./login-form";
 
 export const metadata: Metadata = {
   title: "Employer login",
   description:
-    "Open an employer session on this device - then search the pool, shortlist matches, and see contact channels.",
+    "Open an employer session on this device - then search the pool, shortlists, and see contact channels.",
 };
 
 export default async function HireLoginPage() {
-  const session = await readHrSession();
+  const hr = await readHrSession();
+  if (hr && (hr.isAdmin || hr.employerStatus !== "none")) redirect("/hire/search");
 
   return (
-    <PageShell active="/hire">
+    <PageShell variant="hire" active="/hire">
       <section className="relative overflow-hidden pt-14 pb-24 lg:pt-20">
         <div className="bg-dither" aria-hidden="true">
-          <DitherEffect
-            colorFront="#1F2DE6"
-            colorBack="#ffffff"
-            scale={0.8}
-            className="dither-soft"
-          />
+          <DitherCanvas />
         </div>
         <div className="relative max-w-[1160px] mx-auto px-6">
           <div
@@ -41,12 +38,11 @@ export default async function HireLoginPage() {
               First, your login.
             </h1>
             <p className="mt-3 text-[15.5px] leading-[1.6] text-muted">
-              Sign in with your email and password. Search, shortlists, and
-              contact channels unlock on this device once your company is
-              verified.
+              Sign in with your email and password. Search, shortlists, and contact channels unlock
+              on this device once your company is verified.
             </p>
             <div className="mt-6">
-              <LoginForm initialSession={session} bare />
+              <LoginForm initialStage={hr ? "company" : "signin"} />
             </div>
           </div>
         </div>

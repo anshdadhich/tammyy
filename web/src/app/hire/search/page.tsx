@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 import PageShell from "@/components/PageShell";
 import { readHrSession } from "@/lib/hr-session";
 import SearchClient from "./search-client";
@@ -10,11 +11,17 @@ export const metadata: Metadata = {
 };
 
 export default async function HireSearchPage() {
-  const session = await readHrSession();
-
+  const hr = await readHrSession();
+  if (!hr || (hr.employerStatus === "none" && !hr.isAdmin)) redirect("/hire/login");
   return (
-    <PageShell active="/hire">
-      <SearchClient initialSession={session} />
+    <PageShell
+      variant="hire"
+      active="/hire"
+      viewer={{ kind: "hr", email: hr.email, name: hr.name, isAdmin: hr.isAdmin }}
+    >
+      <SearchClient
+        session={{ email: hr.email, name: hr.name, employerStatus: hr.employerStatus }}
+      />
     </PageShell>
   );
 }

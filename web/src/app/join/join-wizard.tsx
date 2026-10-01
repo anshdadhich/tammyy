@@ -1,2727 +1,1883 @@
 "use client";
 
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type KeyboardEvent,
-  type ReactNode,
-} from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import {
-  ArrowLeft,
-  ArrowRight,
-  Check,
-  ChevronDown,
-  CircleAlert,
-  Info,
-  Loader2,
-  Plus,
-  Search,
-  Sparkles,
-  Trash2,
-} from "lucide-react";
-import { candidateSchema, toFieldErrors } from "@/lib/validators";
-import { SESSION_EVENT } from "@/lib/session-client";
+  AUTOFILL_DRAFT,
+  INITIAL_DRAFT,
+  STEPS,
+  buildPayload,
+  clearDraft,
+  emptyEducation,
+  emptyExperience,
+  emptyOss,
+  emptyProject,
+  loadDraft,
+  parseCandidate,
+  payloadErrors,
+  saveDraft,
+  stepForKey,
+  validateAccount,
+  validateStep,
+  type Draft,
+} from "./join-draft";
 import {
-  DOMAINS,
-  LOCATIONS,
-  SALARY_FREQUENCIES,
-} from "@/lib/skills";
-import SkillPicker from "@/components/SkillPicker";
+  CheckField,
+  ChipPicker,
+  SelectField,
+  TextAreaField,
+  TextField,
+} from "./join-fields";
 
-type ExpRow = {
-  company: string;
-  title: string;
-  start_date: string;
-  end_date: string;
-  current: boolean;
-  description: string;
-  achievements: string;
-  tech: string[];
-};
-type ProjRow = {
-  title: string;
-  description: string;
-  problem: string;
-  tech: string[];
-  role: string;
-  links: { live: string; repo: string; demo: string };
-  impact: string;
-  users_scale: string;
-  hardest_challenge: string;
-  personal_contribution: string;
-  project_type: string;
-};
-type EduRow = {
-  institution: string;
-  degree: string;
-  field: string;
-  years: string;
-  achievements: string;
-};
-type OssRow = {
-  repo_name: string;
-  repo_url: string;
-  description: string;
-  tech: string[];
-  role: string;
+type StepErrors = Record<string, string>;
+
+type PublishResult = {
+  id: string;
+  existed: boolean;
+  warnings: string[];
 };
 
-type Draft = {
-  name: string;
-  email: string;
-  phone: string;
-  location: string;
-  photo_url: string;
-  role: string;
-  current_role: string;
-  headline: string;
-  domain: string;
-  exp: string;
-  skills: string[];
-  experiences: ExpRow[];
-  projects: ProjRow[];
-  oss: OssRow[];
-  education: EduRow[];
-  links: { github: string; linkedin: string; portfolio: string; resume_url: string };
-  min_salary: string;
-  currency: string;
-  frequency: string;
-  negotiable: boolean;
-  location_pref: string;
-  remote_pref: string;
-  relocation: boolean;
-  availability: string;
-  notice_period: string;
-  visibility: string;
-  show_email: boolean;
-  show_phone: boolean;
-  show_linkedin: boolean;
-  show_github: boolean;
-  show_resume: boolean;
-  show_portfolio: boolean;
-  show_photo: boolean;
-  consent: boolean;
+const STEP_TITLES: Record<number, { title: string; sub: string }> = {
+  1: { title: "Basics - who you are", sub: "This is how your page introduces you." },
+  2: { title: "Your direction", sub: "Where you want to go next." },
+  3: { title: "Your experience", sub: "Roles, wins, and scope." },
+  4: { title: "Your projects", sub: "Shipped things you are proud of." },
+  5: { title: "Your background", sub: "School, open source, links." },
+  6: { title: "Private details", sub: "Only for hiring teams." },
+  7: { title: "Your account", sub: "Email, password, publish." },
 };
 
-type StringKeys<D> = {
-  [K in keyof D]: D[K] extends string ? K : never;
-}[keyof D];
-type BoolKeys<D> = {
-  [K in keyof D]: D[K] extends boolean ? K : never;
-}[keyof D];
-
-const LS_KEY = "tammy.join.draft.v1";
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-const STEPS = [
-  "Basics",
-  "Profile",
-  "Experience",
-  "Projects",
-  "Background",
-  "Private",
-  "Review",
-] as const;
-
-const STEP_TITLES: [string, string][] = [
-  ["Basics - who you are", "This is how your page introduces you."],
-  [
-    "Profile - the work you want next",
-    "Role, domain, and the skills you get found by.",
-  ],
-  [
-    "Experience - where you've worked",
-    "Titles, dates, what you actually did - one card per role.",
-  ],
-  [
-    "Projects - what you've shipped",
-    "A couple of real ones beat a list of ten.",
-  ],
-  [
-    "Background - the paper trail",
-    "Education and open source - the record behind the work.",
-  ],
-  [
-    "Private - how you're found",
-    "Preferences, links, and exactly what employers can see.",
-  ],
-  ["Review - read it as they will", "One pass before anything enters search."],
-];
-
-const STEP_OF_FIELD: Record<string, number> = {
-  name: 0,
-  email: 0,
-  phone: 0,
-  location: 0,
-  photo_url: 0,
-  role: 1,
-  current_role: 1,
-  headline: 1,
-  domain: 1,
-  exp: 1,
-  skills: 1,
-  experiences: 2,
-  projects: 3,
-  oss: 4,
-  education: 4,
-  links: 5,
-  min_salary: 5,
-  currency: 5,
-  frequency: 5,
-  negotiable: 5,
-  location_pref: 5,
-  remote_pref: 5,
-  relocation: 5,
-  availability: 5,
-  notice_period: 5,
-  visibility: 5,
-  show_email: 5,
-  show_phone: 5,
-  show_linkedin: 5,
-  show_github: 5,
-  show_resume: 5,
-  show_portfolio: 5,
-  show_photo: 5,
-  consent: 6,
-};
-
-const stepOf = (rootKey: string) => STEP_OF_FIELD[rootKey] ?? 6;
-
-const DEFAULT_DRAFT: Draft = {
-  name: "",
-  email: "",
-  phone: "",
-  location: "",
-  photo_url: "",
-  role: "",
-  current_role: "",
-  headline: "",
-  domain: "Software Development",
-  exp: "",
-  skills: [],
-  experiences: [],
-  projects: [],
-  oss: [],
-  education: [],
-  links: { github: "", linkedin: "", portfolio: "", resume_url: "" },
-  min_salary: "",
-  currency: "INR",
-  frequency: "monthly",
-  negotiable: true,
-  location_pref: "",
-  remote_pref: "remote",
-  relocation: false,
-  availability: "Immediate",
-  notice_period: "",
-  visibility: "visible",
-  show_email: false,
-  show_phone: false,
-  show_linkedin: false,
-  show_github: false,
-  show_resume: false,
-  show_portfolio: false,
-  show_photo: false,
-  consent: false,
-};
-
-const CURRENCIES = ["INR", "USD", "EUR", "GBP", "SGD", "AED", "AUD", "CAD"];
-
-const ROLE_SUGGESTIONS = [
-  "Software Engineer",
-  "Senior Software Engineer",
-  "Staff Engineer",
-  "Principal Engineer",
-  "Engineering Manager",
-  "Frontend Engineer",
+const ROLE_OPTIONS = [
   "Backend Engineer",
-  "Full Stack Engineer",
-  "Mobile Developer",
-  "iOS Developer",
-  "Android Developer",
-  "DevOps Engineer",
-  "Site Reliability Engineer",
-  "Cloud Engineer",
-  "Platform Engineer",
-  "Solutions Architect",
-  "Technical Architect",
+  "Frontend Engineer",
+  "Full-stack Engineer",
+  "Mobile Engineer",
+  "DevOps / SRE",
   "Data Engineer",
-  "Data Scientist",
-  "Machine Learning Engineer",
-  "Data Analyst",
-  "Business Analyst",
-  "Product Manager",
-  "Senior Product Manager",
-  "Program Manager",
-  "Project Manager",
-  "Product Designer",
-  "UX Designer",
-  "UI Designer",
+  "ML Engineer",
   "QA Engineer",
-  "Automation Test Engineer",
   "Security Engineer",
-  "Database Administrator",
-  "System Administrator",
-  "Growth Manager",
-  "Marketing Manager",
-  "Sales Manager",
-  "Content Writer",
-  "Customer Success Manager",
-  "Research Scientist",
-] as const;
-
-const EXP_SUGGESTIONS = [
-  "0", "0.5", "1", "1.5", "2", "3", "4", "5", "6", "7", "8", "9", "10",
-  "12", "15", "20", "25", "30",
-] as const;
-
-const PROJECT_TYPES = [
-  { v: "personal", label: "Personal" },
-  { v: "academic", label: "Academic" },
-  { v: "freelance", label: "Freelance" },
-  { v: "production", label: "Production" },
-  { v: "open_source", label: "Open source" },
-  { v: "prototype", label: "Prototype" },
-] as const;
-
-const DEGREE_SUGGESTIONS = [
-  "B.E.", "B.Tech", "B.S.", "B.Sc", "BCA", "BBA",
-  "M.E.", "M.Tech", "M.S.", "M.Sc", "MCA", "MBA",
-  "Ph.D.", "Diploma", "Advanced Diploma",
-] as const;
-
-const FIELD_SUGGESTIONS = [
-  "Computer Science",
-  "Information Technology",
-  "Electronics & Communication",
-  "Electrical Engineering",
-  "Mechanical Engineering",
-  "Civil Engineering",
-  "Mathematics",
-  "Statistics",
-  "Data Science",
-  "Business Administration",
-  "Commerce",
-  "Economics",
-  "Design",
-] as const;
-
-const OSS_ROLES = [
-  "Maintainer",
-  "Contributor",
-  "Core contributor",
-  "Owner",
-  "Triager",
-  "Reviewer",
-] as const;
-
-const NOTICE_PERIODS = [
-  "No notice period",
-  "15 days",
-  "30 days",
-  "45 days",
-  "60 days",
-  "90 days",
-] as const;
-
-const AVAILABILITY_OPTS = [
-  { v: "Immediate", label: "Immediate" },
-  { v: "Within 15 days", label: "15 days" },
-  { v: "Within 30 days", label: "30 days" },
-  { v: "Within 60 days", label: "60 days" },
-  { v: "After 90 days", label: "90+ days" },
-] as const;
-
-const WORK_MODE_OPTS = [
-  { v: "remote", label: "Remote" },
-  { v: "hybrid", label: "Hybrid" },
-  { v: "onsite", label: "On-site" },
-] as const;
-
-const SKILL_SUGGESTIONS = [
-  "JavaScript",
-  "TypeScript",
-  "React",
-  "Next.js",
-  "Node.js",
-  "Python",
-  "Java",
-  "Go",
-  "PostgreSQL",
-  "Redis",
-  "Docker",
-  "Kubernetes",
-  "AWS",
-  "GraphQL",
-  "Figma",
-  "Git",
-] as const;
-
-const blankExp = (): ExpRow => ({
-  company: "",
-  title: "",
-  start_date: "",
-  end_date: "",
-  current: false,
-  description: "",
-  achievements: "",
-  tech: [],
-});
-const blankProj = (): ProjRow => ({
-  title: "",
-  description: "",
-  problem: "",
-  tech: [],
-  role: "",
-  links: { live: "", repo: "", demo: "" },
-  impact: "",
-  users_scale: "",
-  hardest_challenge: "",
-  personal_contribution: "",
-  project_type: "",
-});
-const blankEdu = (): EduRow => ({
-  institution: "",
-  degree: "",
-  field: "",
-  years: "",
-  achievements: "",
-});
-const blankOss = (): OssRow => ({
-  repo_name: "",
-  repo_url: "",
-  description: "",
-  tech: [],
-  role: "Contributor",
-});
-
-const SAMPLES: Partial<Draft>[] = [
-  {
-    name: "Aarav Sharma",
-    email: "aarav.sharma@example.com",
-    phone: "+91 98765 43210",
-    location: "Bengaluru",
-  },
-  {
-    role: "Backend Engineer",
-    current_role: "SDE II at Paystream",
-    headline: "Payments, ledgers, and the occasional postmortem.",
-    domain: "Software Development",
-    exp: "4",
-    skills: ["Node.js", "PostgreSQL", "TypeScript"],
-  },
-  {
-    experiences: [
-      {
-        company: "Paystream",
-        title: "Software Engineer II",
-        start_date: "2022-04",
-        end_date: "",
-        current: true,
-        description:
-          "Own the double-entry ledger service behind payouts and refunds.",
-        achievements:
-          "Cut reconciliation time from hours to minutes\nLed the migration off the legacy jobs queue",
-        tech: ["Node.js", "PostgreSQL", "Redis"],
-      },
-    ],
-  },
-  {
-    projects: [
-      {
-        title: "Ledger reconciliation engine",
-        description:
-          "Nightly reconciliation across payment rails, with a ruled replays for drifted rows.",
-        problem: "Settlement drift appeared days late and nobody could trace it.",
-        tech: ["Node.js", "PostgreSQL"],
-        role: "Backend owner",
-        links: { live: "", repo: "", demo: "" },
-        impact: "Drift detected in minutes instead of days.",
-        users_scale: "40k accounts",
-        hardest_challenge: "Idempotent replays without double-posting entries.",
-        personal_contribution: "Schema, worker design, and the alert rules.",
-        project_type: "production",
-      },
-    ],
-  },
-  {
-    education: [
-      {
-        institution: "Visvesvaraya Technological University",
-        degree: "B.E.",
-        field: "Computer Science",
-        years: "2018 – 2022",
-        achievements: "",
-      },
-    ],
-    oss: [
-      {
-        repo_name: "pg-migrate-lite",
-        repo_url: "https://github.com/example/pg-migrate-lite",
-        description: "Zero-dependency migration runner for Postgres.",
-        tech: ["TypeScript"],
-        role: "Maintainer",
-      },
-    ],
-  },
-  {
-    min_salary: "280000",
-    currency: "INR",
-    frequency: "monthly",
-    location_pref: "Remote",
-    remote_pref: "remote",
-    availability: "Immediate",
-    notice_period: "30 days",
-    links: {
-      github: "https://github.com/example",
-      linkedin: "",
-      portfolio: "",
-      resume_url: "",
-    },
-  },
-  { consent: true },
+  "Product Manager",
+  "Product Designer",
+  "Data Analyst",
+  "Engineering Manager",
+  "DevRel",
+  "Other",
 ];
 
-function fillEmpty(d: Draft, patch: Partial<Draft>): Draft {
-  const next: Draft = { ...d, links: { ...d.links } };
-  const src = patch as unknown as Record<string, unknown>;
-  const dst = next as unknown as Record<string, unknown>;
-  for (const k of Object.keys(src)) {
-    const v = src[k];
-    if (v === undefined || v === null) continue;
-    if (k === "links" && typeof v === "object") {
-      const lv = v as Draft["links"];
-      const lc = next.links;
-      next.links = {
-        github: lc.github || lv.github || "",
-        linkedin: lc.linkedin || lv.linkedin || "",
-        portfolio: lc.portfolio || lv.portfolio || "",
-        resume_url: lc.resume_url || lv.resume_url || "",
-      };
-      continue;
-    }
-    const cur = dst[k];
-    if (Array.isArray(v)) {
-      if (Array.isArray(cur) && cur.length === 0) dst[k] = v;
-      continue;
-    }
-    if (typeof v === "boolean") {
-      if (cur === false) dst[k] = v;
-      continue;
-    }
-    if (typeof v === "string" && typeof cur === "string" && !cur.trim()) {
-      dst[k] = v;
-    }
+const CITIES = [
+  "Bengaluru",
+  "Hyderabad",
+  "Pune",
+  "Mumbai",
+  "Delhi NCR",
+  "Chennai",
+  "Ahmedabad",
+  "Kolkata",
+  "Coimbatore",
+  "India (remote)",
+  "Remote (India)",
+  "Dubai",
+  "Singapore",
+];
+
+const NOTICE_OPTIONS = [
+  { value: "", label: "Not specified" },
+  { value: "No notice period", label: "No notice period" },
+  { value: "15 days", label: "15 days" },
+  { value: "30 days", label: "30 days" },
+  { value: "45 days", label: "45 days" },
+  { value: "60 days", label: "60 days" },
+  { value: "90 days", label: "90 days" },
+];
+
+const AVAILABILITY_OPTIONS = [
+  { value: "Immediate", label: "Immediate" },
+  { value: "Within 15 days", label: "15 days" },
+  { value: "Within 30 days", label: "30 days" },
+  { value: "Within 60 days", label: "60 days" },
+  { value: "After 90 days", label: "90+ days" },
+];
+
+const WORK_MODE_OPTIONS = [
+  { value: "remote", label: "Remote" },
+  { value: "hybrid", label: "Hybrid" },
+  { value: "onsite", label: "On-site" },
+];
+
+const VISIBILITY_OPTIONS = [
+  { value: "visible", label: "Listed in search" },
+  { value: "hidden", label: "Unlisted" },
+  { value: "inactive", label: "Inactive" },
+];
+
+const CURRENCY_OPTIONS = [
+  "INR",
+  "USD",
+  "EUR",
+  "GBP",
+  "SGD",
+  "AED",
+  "AUD",
+  "CAD",
+].map((code) => ({ value: code, label: code }));
+
+const FREQUENCY_OPTIONS = [
+  { value: "hourly", label: "Hourly" },
+  { value: "monthly", label: "Monthly" },
+  { value: "yearly", label: "Yearly" },
+];
+
+const PROJECT_TYPE_OPTIONS = [
+  { value: "", label: "Not specified" },
+  { value: "personal", label: "Personal" },
+  { value: "academic", label: "Academic" },
+  { value: "freelance", label: "Freelance" },
+  { value: "production", label: "Production" },
+  { value: "open_source", label: "Open source" },
+  { value: "prototype", label: "Prototype" },
+];
+
+const DEGREE_OPTIONS = [
+  { value: "", label: "Not specified" },
+  { value: "B.E.", label: "B.E." },
+  { value: "B.Tech", label: "B.Tech" },
+  { value: "B.S.", label: "B.S." },
+  { value: "B.Sc", label: "B.Sc" },
+  { value: "BCA", label: "BCA" },
+  { value: "BBA", label: "BBA" },
+  { value: "M.E.", label: "M.E." },
+  { value: "M.Tech", label: "M.Tech" },
+  { value: "M.S.", label: "M.S." },
+  { value: "M.Sc", label: "M.Sc" },
+  { value: "MCA", label: "MCA" },
+  { value: "MBA", label: "MBA" },
+  { value: "Ph.D.", label: "Ph.D." },
+  { value: "Diploma", label: "Diploma" },
+  { value: "Advanced Diploma", label: "Advanced Diploma" },
+];
+
+const OSS_ROLE_OPTIONS = [
+  { value: "", label: "Not specified" },
+  { value: "Maintainer", label: "Maintainer" },
+  { value: "Contributor", label: "Contributor" },
+  { value: "Core contributor", label: "Core contributor" },
+  { value: "Owner", label: "Owner" },
+  { value: "Triager", label: "Triager" },
+  { value: "Reviewer", label: "Reviewer" },
+];
+
+function withValue(
+  options: { value: string; label: string }[],
+  value: string,
+) {
+  if (!value || options.some((option) => option.value === value)) return options;
+  return [...options, { value, label: value }];
+}
+
+function entryFor(errors: StepErrors, base: string, index: number): StepErrors {
+  const out: StepErrors = {};
+  const prefix = `${base}.${index}.`;
+  for (const [key, message] of Object.entries(errors)) {
+    if (!key.startsWith(prefix)) continue;
+    const rest = key.slice(prefix.length).split(".");
+    if (rest.length > 1 && /^\d+$/.test(rest[rest.length - 1])) rest.pop();
+    out[rest.join(".")] = message;
   }
-  return next;
-}
-
-function buildPayload(d: Draft) {
-  return {
-    name: d.name.trim(),
-    email: d.email.trim(),
-    phone: d.phone.trim(),
-    location: d.location.trim(),
-    photo_url: d.photo_url.trim(),
-    role: d.role.trim(),
-    current_role: d.current_role.trim(),
-    headline: d.headline.trim(),
-    domain: d.domain,
-    exp: Number(d.exp) || 0,
-    skills: d.skills,
-    experiences: d.experiences,
-    projects: d.projects,
-    oss: d.oss,
-    education: d.education,
-    links: {
-      github: d.links.github.trim(),
-      linkedin: d.links.linkedin.trim(),
-      portfolio: d.links.portfolio.trim(),
-      resume_url: d.links.resume_url.trim(),
-    },
-    min_salary: Number(String(d.min_salary).replace(/[^\d.]/g, "")) || 0,
-    currency: d.currency,
-    frequency: d.frequency,
-    negotiable: d.negotiable,
-    location_pref: d.location_pref.trim(),
-    remote_pref: d.remote_pref,
-    relocation: d.relocation,
-    availability: d.availability.trim(),
-    notice_period: d.notice_period.trim() || undefined,
-    visibility: d.visibility,
-    show_email: d.show_email,
-    show_phone: d.show_phone,
-    show_linkedin: d.show_linkedin,
-    show_github: d.show_github,
-    show_resume: d.show_resume,
-    show_portfolio: d.show_portfolio,
-    show_photo: d.show_photo,
-    consent: d.consent,
-  };
-}
-
-function fromFlat(errors: unknown): Record<string, string> {
-  const fe = (errors as { fieldErrors?: Record<string, string[]> } | null)?.fieldErrors;
-  const out: Record<string, string> = {};
-  if (fe) for (const [k, v] of Object.entries(fe)) if (Array.isArray(v) && v[0]) out[k] = v[0];
   return out;
 }
 
-function F({
-  label,
-  htmlFor,
-  req,
-  hint,
-  error,
-  children,
-}: {
-  label: string;
-  htmlFor: string;
-  req?: boolean;
-  hint?: string;
-  error?: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="field content-start">
-      <label className="field-label" htmlFor={htmlFor}>
-        {label}
-        {req ? (
-          <span className="req" aria-hidden="true">
-            *
-          </span>
-        ) : null}
-      </label>
-      {children}
-      {hint && !error ? <span className="field-hint">{hint}</span> : null}
-      {error ? (
-        <span className="field-error" role="alert">
-          {error}
-        </span>
-      ) : null}
-    </div>
-  );
-}
-
-function SegGroup<T extends string>({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: T;
-  options: readonly { v: T; label: string }[];
-  onChange: (v: T) => void;
-}) {
-  return (
-    <div className="field content-start">
-      <span className="field-label">{label}</span>
-      <div className="seg h-[46.5px]" role="group" aria-label={label}>
-        {options.map((o) => (
-          <button
-            key={o.v}
-            type="button"
-            className={`seg-btn ${value === o.v ? "is-on" : ""}`}
-            aria-pressed={value === o.v}
-            onClick={() => onChange(o.v)}
-          >
-            {o.label}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function useOutsideDismiss(
-  open: boolean,
-  ref: { current: HTMLElement | null },
-  dismiss: () => void,
-) {
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: PointerEvent) => {
-      const el = ref.current;
-      const t = e.target;
-      if (el && (!(t instanceof Node) || !el.contains(t))) dismiss();
-    };
-    document.addEventListener("pointerdown", onDown);
-    return () => document.removeEventListener("pointerdown", onDown);
-  }, [open, ref, dismiss]);
-}
-
-function PickList({
-  listId,
-  items,
-  active,
-  display,
-  onHover,
-  onPick,
-  onOther,
-}: {
-  listId: string;
-  items: readonly string[];
-  active: number;
-  display?: (v: string) => string;
-  onHover: (i: number) => void;
-  onPick: (i: number) => void;
-  onOther?: () => void;
-}) {
-  useEffect(() => {
-    if (active < 0) return;
-    const panel = document.getElementById(listId);
-    const el = panel?.querySelector<HTMLElement>(`[data-idx="${active}"]`);
-    if (!panel || !el) return;
-    const top = el.offsetTop;
-    const bottom = top + el.offsetHeight;
-    if (top < panel.scrollTop) panel.scrollTop = top;
-    else if (bottom > panel.scrollTop + panel.clientHeight)
-      panel.scrollTop = bottom - panel.clientHeight;
-  }, [listId, active]);
-
-  return (
-    <div
-      id={listId}
-      role="listbox"
-      className="absolute left-0 right-0 top-full z-30 mt-1.5 max-h-60 overflow-y-auto rounded-[14px] border border-line bg-surface shadow-soft-md py-1.5"
-    >
-      {items.length === 0 ? (
-        <div
-          role="option"
-          aria-selected={false}
-          className="px-3.5 py-2 text-[13.5px] text-muted"
-        >
-          No matches
-        </div>
-      ) : (
-        items.map((item, i) => (
-          <button
-            key={item === "" ? "__empty__" : item}
-            type="button"
-            role="option"
-            id={`${listId}-${i}`}
-            data-idx={i}
-            aria-selected={i === active}
-            tabIndex={-1}
-            className={`block w-full cursor-pointer border-0 px-3.5 py-2 text-left text-[14px] leading-[1.45] ${
-              i === active ? "bg-inset text-ink" : "bg-transparent text-body"
-            }`}
-            onMouseDown={(e) => e.preventDefault()}
-            onMouseEnter={() => onHover(i)}
-            onClick={() => onPick(i)}
-          >
-            {display ? display(item) : item}
-          </button>
-        ))
-      )}
-      {onOther ? (
-        <button
-          type="button"
-          role="option"
-          aria-selected={false}
-          tabIndex={-1}
-          className="block w-full cursor-pointer border-0 px-3.5 py-2 text-left text-[14px] leading-[1.45] bg-transparent text-muted"
-          onMouseDown={(e) => e.preventDefault()}
-          onMouseEnter={() => onHover(-1)}
-          onClick={onOther}
-        >
-          Other - type my own
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
-function PickCombo({
-  id,
-  value,
-  options,
-  onChange,
-  placeholder,
-  invalid,
-  inputMode,
-  maxLength,
-}: {
-  id: string;
-  value: string;
-  options: readonly string[];
-  onChange: (v: string) => void;
-  placeholder?: string;
-  invalid?: boolean;
-  inputMode?: "text" | "decimal" | "numeric" | "none" | "search" | "email" | "tel" | "url";
-  maxLength?: number;
-}) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const [free, setFree] = useState(false);
-  const [active, setActive] = useState(0);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const listId = `${id}-listbox`;
-
-  const q = query.trim().toLowerCase();
-  const items = q
-    ? options.filter((o) => o.toLowerCase().includes(q))
-    : options;
-  const ai = items.length ? Math.min(active, items.length - 1) : -1;
-
-  const close = useCallback(() => {
-    setOpen(false);
-    setQuery("");
-    setFree(false);
-  }, []);
-  useOutsideDismiss(open, wrapRef, close);
-
-  const openList = () => {
-    setOpen(true);
-    setQuery("");
-    setFree(false);
-    setActive(0);
-  };
-
-  const startOther = () => {
-    setFree(true);
-    setOpen(false);
-    setQuery("");
-    setActive(0);
-    inputRef.current?.focus();
-  };
-
-  const commit = (v: string) => {
-    onChange(v);
-    close();
-  };
-
-  const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
-    const k = e.key;
-    if (k === "ArrowDown" || k === "ArrowUp") {
-      e.preventDefault();
-      if (!open) {
-        setOpen(true);
-        setQuery("");
-        setFree(false);
-        setActive(k === "ArrowDown" ? 0 : Math.max(0, items.length - 1));
-        return;
-      }
-      if (!items.length) return;
-      setActive(
-        Math.min(
-          Math.max(k === "ArrowDown" ? ai + 1 : ai - 1, 0),
-          items.length - 1,
-        ),
-      );
-      return;
-    }
-    if (k === "Enter") {
-      if (open) {
-        e.preventDefault();
-        if (ai >= 0) commit(items[ai]);
-        else startOther();
-      } else if (free) {
-        e.preventDefault();
-      }
-      return;
-    }
-    if (k === "Escape") {
-      if (open) {
-        e.preventDefault();
-        close();
-      } else if (free) {
-        e.preventDefault();
-        setFree(false);
-      }
-      return;
-    }
-    if (k === "Tab") close();
-  };
-
-  return (
-    <div
-      className="relative"
-      ref={wrapRef}
-      onBlur={(e) => {
-        const next = e.relatedTarget;
-        if (!next || !e.currentTarget.contains(next)) close();
-      }}
-    >
-      <input
-        id={id}
-        ref={inputRef}
-        className="input"
-        style={{ paddingRight: 38 }}
-        role="combobox"
-        aria-expanded={open}
-        aria-controls={open ? listId : undefined}
-        aria-autocomplete="list"
-        aria-activedescendant={open && ai >= 0 ? `${listId}-${ai}` : undefined}
-        aria-invalid={invalid ? true : undefined}
-        value={value}
-        placeholder={free ? "Type your own…" : placeholder}
-        inputMode={inputMode}
-        maxLength={maxLength}
-        autoComplete="off"
-        onFocus={() => {
-          if (!open) openList();
-        }}
-        onClick={() => {
-          if (!open) openList();
-        }}
-        onChange={(e) => {
-          const v = e.target.value;
-          onChange(v);
-          if (free) return;
-          setQuery(v);
-          setActive(0);
-          setOpen(true);
-        }}
-        onKeyDown={onKey}
-      />
-      <ChevronDown
-        size={16}
-        aria-hidden="true"
-        className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-muted"
-      />
-      {open ? (
-        <PickList
-          listId={listId}
-          items={items}
-          active={ai}
-          onHover={setActive}
-          onPick={(i) => commit(items[i])}
-          onOther={startOther}
-        />
-      ) : null}
-    </div>
-  );
-}
-
-function PickSelect({
-  id,
-  value,
-  options,
-  onChange,
-  placeholder,
-}: {
-  id: string;
-  value: string;
-  options: readonly string[];
-  onChange: (v: string) => void;
-  placeholder?: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const [active, setActive] = useState(0);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const suppressRef = useRef(false);
-  const listId = `${id}-listbox`;
-
-  const items: string[] = [
-    ...(placeholder !== undefined ? [""] : []),
-    ...(value && !options.includes(value) ? [value] : []),
-    ...options,
-  ];
-  const ai = items.length ? Math.min(active, items.length - 1) : -1;
-
-  const close = useCallback(() => setOpen(false), []);
-  useOutsideDismiss(open, wrapRef, close);
-
-  const labelOf = (v: string) =>
-    v === "" ? (placeholder ?? "Not specified") : v;
-
-  const openAtValue = () => {
-    setOpen(true);
-    setActive(Math.max(0, items.indexOf(value)));
-  };
-
-  const commit = (v: string) => {
-    onChange(v);
-    close();
-  };
-
-  const onKey = (e: KeyboardEvent<HTMLButtonElement>) => {
-    const k = e.key;
-    if (k === "ArrowDown" || k === "ArrowUp") {
-      suppressRef.current = false;
-      e.preventDefault();
-      if (!open) {
-        setOpen(true);
-        setActive(
-          k === "ArrowDown"
-            ? Math.max(0, items.indexOf(value))
-            : Math.max(0, items.length - 1),
-        );
-        return;
-      }
-      if (!items.length) return;
-      setActive(
-        Math.min(
-          Math.max(k === "ArrowDown" ? ai + 1 : ai - 1, 0),
-          items.length - 1,
-        ),
-      );
-      return;
-    }
-    if (k === "Enter" || k === " ") {
-      if (open) {
-        e.preventDefault();
-        suppressRef.current = true;
-        if (ai >= 0) commit(items[ai]);
-        else close();
-      } else {
-        suppressRef.current = false;
-      }
-      return;
-    }
-    suppressRef.current = false;
-    if (k === "Escape" && open) {
-      e.preventDefault();
-      close();
-    }
-  };
-
-  return (
-    <div
-      className="relative"
-      ref={wrapRef}
-      onPointerDown={() => {
-        suppressRef.current = false;
-      }}
-      onBlur={(e) => {
-        const next = e.relatedTarget;
-        if (!next || !e.currentTarget.contains(next)) close();
-      }}
-    >
-      <button
-        id={id}
-        type="button"
-        role="combobox"
-        className="select cursor-pointer text-left"
-        aria-expanded={open}
-        aria-haspopup="listbox"
-        aria-controls={open ? listId : undefined}
-        aria-activedescendant={open && ai >= 0 ? `${listId}-${ai}` : undefined}
-        onClick={() => {
-          if (suppressRef.current) {
-            suppressRef.current = false;
-            return;
-          }
-          if (open) close();
-          else openAtValue();
-        }}
-        onKeyDown={onKey}
-      >
-        <span className={`block truncate ${value ? "text-ink" : "text-muted"}`}>
-          {value ? value : placeholder ? placeholder : "Select"}
-        </span>
-      </button>
-      {open ? (
-        <PickList
-          listId={listId}
-          items={items}
-          active={ai}
-          display={labelOf}
-          onHover={setActive}
-          onPick={(i) => commit(items[i])}
-        />
-      ) : null}
-    </div>
-  );
-}
-
-function RowShell({
-  label,
-  onRemove,
-  children,
-}: {
-  label: string;
-  onRemove: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <div className="rounded-2xl bg-inset p-4 sm:p-5">
-      <div className="flex items-center justify-between gap-3 mb-4">
-        <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">
-          {label}
-        </span>
-        <button type="button" className="btn btn-secondary btn-sm press" onClick={onRemove}>
-          <Trash2 size={14} aria-hidden="true" /> Remove
-        </button>
-      </div>
-      <div className="grid gap-4 sm:grid-cols-2">{children}</div>
-    </div>
-  );
-}
-
-function ReviewCard({
-  title,
-  onEdit,
-  children,
-}: {
-  title: string;
-  onEdit: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <div className="rounded-2xl bg-inset p-5">
-      <div className="flex items-center justify-between gap-3">
-        <h3 className="text-[15px] font-semibold text-ink">{title}</h3>
-        <button
-          type="button"
-          className="btn-link"
-          onClick={onEdit}
-        >
-          Edit
-        </button>
-      </div>
-      <div className="mt-3 text-[14px] leading-[1.55] text-body grid gap-1.5">{children}</div>
-    </div>
-  );
-}
-
 export default function JoinWizard() {
-  const [draft, setDraft] = useState<Draft>(DEFAULT_DRAFT);
-  const draftRef = useRef(draft);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const router = useRouter();
+  const [draft, setDraft] = useState<Draft>(INITIAL_DRAFT);
+  const [step, setStep] = useState(1);
+  const [errors, setErrors] = useState<StepErrors>({});
+  const [formError, setFormError] = useState("");
+  const [lookupMsg, setLookupMsg] = useState("");
+  const [lookupState, setLookupState] = useState<
+    "idle" | "checking" | "found" | "missing" | "failed"
+  >("idle");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [pending, setPending] = useState(false);
+  const [maxStep, setMaxStep] = useState(1);
   const [hydrated, setHydrated] = useState(false);
-  const [saveState, setSaveState] = useState<"saving" | "saved">("saved");
-  const [step, setStep] = useState(0);
-  const [maxStep, setMaxStep] = useState(0);
-  const [dir, setDir] = useState<1 | -1>(1);
-  const [errs, setErrs] = useState<Record<string, string>>({});
-  const [notice, setNotice] = useState<string | null>(null);
-  const [noticeId, setNoticeId] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState<{ id: string; warnings: string[] } | null>(null);
-  const [lookupBusy, setLookupBusy] = useState(false);
-  const [lookupMsg, setLookupMsg] = useState<string | null>(null);
-  const [claimPending, setClaimPending] = useState<{
-    candidateId: string;
-    mode: "created" | "exists";
-    message: string;
-    warnings: string[];
-  } | null>(null);
-  const [claimPassword, setClaimPassword] = useState("");
-  const [claimConfirm, setClaimConfirm] = useState("");
-  const [claimBusy, setClaimBusy] = useState(false);
-  const [claimErr, setClaimErr] = useState<string | null>(null);
+  const [published, setPublished] = useState<PublishResult | null>(null);
+  const [back, setBack] = useState(false);
+  const prevStep = useRef(1);
+  const stepRef = useRef(1);
+  const cardRef = useRef<HTMLDivElement | null>(null);
 
-  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(LS_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as Partial<Draft> | null;
-        if (parsed && typeof parsed === "object") {
-          const restored: Draft = {
-            ...DEFAULT_DRAFT,
-            ...parsed,
-            links: { ...DEFAULT_DRAFT.links, ...(parsed.links ?? {}) },
-          };
-          draftRef.current = restored;
-          setDraft(restored);
-        }
-      }
-    } catch {
-    }
-    setHydrated(true);
-  }, []);
-
-  useEffect(
-    () => () => {
-      if (timer.current) clearTimeout(timer.current);
-    },
-    [],
-  );
-
-  const cardRef = useRef<HTMLDivElement>(null);
-  const prevStep = useRef(step);
-  useEffect(() => {
-    if (prevStep.current === step) return;
-    prevStep.current = step;
-    const el = cardRef.current;
-    if (!el) return;
-    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    window.scrollTo({
-      top: Math.max(0, el.getBoundingClientRect().top + window.scrollY - 76),
-      behavior: reduce ? "auto" : "smooth",
-    });
+    stepRef.current = step;
   }, [step]);
 
-  const update = (fn: (d: Draft) => Draft) => {
-    const next = fn(draftRef.current);
-    draftRef.current = next;
-    setDraft(next);
-    setSaveState("saving");
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => {
-      try {
-        localStorage.setItem(LS_KEY, JSON.stringify(draftRef.current));
-      } catch {
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const stored = loadDraft();
+      if (stored) {
+        setDraft(stored);
+        const restored = Math.min(Math.max(stored.step, 1), STEPS.length);
+        setStep(restored);
+        prevStep.current = restored;
+        setMaxStep(restored);
       }
-      setSaveState("saved");
-    }, 400);
-  };
+      setHydrated(true);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, []);
 
-  const str =
-    <K extends StringKeys<Draft>>(k: K) =>
-    (e: { target: { value: string } }) =>
-      update((d) => ({ ...d, [k]: e.target.value }));
-  const bool =
-    <K extends BoolKeys<Draft>>(k: K) =>
-    (e: { target: { checked: boolean } }) =>
-      update((d) => ({ ...d, [k]: e.target.checked }));
-  const link =
-    (k: keyof Draft["links"]) =>
-    (e: { target: { value: string } }) =>
-      update((d) => ({ ...d, links: { ...d.links, [k]: e.target.value } }));
-  const pick =
-    <K extends StringKeys<Draft>>(k: K) =>
-    (v: string) =>
-      update((d) => ({ ...d, [k]: v }));
+  useEffect(() => {
+    if (!hydrated) return;
+    saveDraft(draft);
+  }, [draft, hydrated]);
 
-  const clearErr = (key: string) =>
-    setErrs((prev) => {
-      if (!(key in prev)) return prev;
-      const next = { ...prev };
-      delete next[key];
+  useEffect(() => {
+    const element = cardRef.current;
+    if (!element) return;
+    if (prevStep.current === step) return;
+    prevStep.current = step;
+    const reduced =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduced) return;
+    const top = element.getBoundingClientRect().top;
+    if (top < -8 || top > 120) {
+      window.scrollTo({ top: window.scrollY + top - 24, behavior: "smooth" });
+    }
+  }, [step]);
+
+  const touch = useCallback((...prefixes: string[]) => {
+    setErrors((current) => {
+      if (Object.keys(current).length === 0) return current;
+      const next: StepErrors = {};
+      for (const [key, message] of Object.entries(current)) {
+        const drop = prefixes.some((prefix) =>
+          prefix.endsWith(".")
+            ? key.startsWith(prefix)
+            : key === prefix || key.startsWith(`${prefix}.`),
+        );
+        if (!drop) next[key] = message;
+      }
       return next;
     });
+    setFormError("");
+  }, []);
 
-  const toggleSkill = (s: string) => {
-    update((d) =>
-      d.skills.some((x) => x.toLowerCase() === s.toLowerCase())
-        ? { ...d, skills: d.skills.filter((x) => x.toLowerCase() !== s.toLowerCase()) }
-        : { ...d, skills: [...d.skills, s] },
-    );
-    clearErr("skills");
-  };
+  const edit = useCallback(
+    (fn: (draft: Draft) => void, ...prefixes: string[]) => {
+      setDraft((current) => {
+        const next: Draft = { ...current };
+        fn(next);
+        return next;
+      });
+      touch(...prefixes);
+    },
+    [touch],
+  );
 
-  const addExp = () => update((d) => ({ ...d, experiences: [...d.experiences, blankExp()] }));
-  const dropExp = (i: number) =>
-    update((d) => ({ ...d, experiences: d.experiences.filter((_, j) => j !== i) }));
-  const onExp =
-    (i: number, k: keyof ExpRow) =>
-    (e: { target: { value: string } }) => {
-      const v = e.target.value;
-      update((d) => ({
-        ...d,
-        experiences: d.experiences.map((r, j) =>
-          j === i ? Object.assign({}, r, { [k]: v }) : r,
-        ),
-      }));
-    };
-  const onExpBool =
-    (i: number) =>
-    (e: { target: { checked: boolean } }) => {
-      const v = e.target.checked;
-      update((d) => ({
-        ...d,
-        experiences: d.experiences.map((r, j) =>
-          j === i ? Object.assign({}, r, { current: v }) : r,
-        ),
-      }));
-    };
-  const onExpTech = (i: number, v: string[]) =>
-    update((d) => ({
-      ...d,
-      experiences: d.experiences.map((r, j) => (j === i ? { ...r, tech: v } : r)),
-    }));
+  const editField = useCallback(
+    (key: string, value: string) => {
+      edit((next) => {
+        (next as unknown as Record<string, string>)[key] = value;
+      }, key);
+    },
+    [edit],
+  );
 
-  const addProj = () => update((d) => ({ ...d, projects: [...d.projects, blankProj()] }));
-  const dropProj = (i: number) =>
-    update((d) => ({ ...d, projects: d.projects.filter((_, j) => j !== i) }));
-  const onProj =
-    (i: number, k: keyof ProjRow) =>
-    (e: { target: { value: string } }) => {
-      const v = e.target.value;
-      update((d) => ({
-        ...d,
-        projects: d.projects.map((r, j) => (j === i ? Object.assign({}, r, { [k]: v }) : r)),
-      }));
-    };
-  const onProjLink = (i: number, k: keyof ProjRow["links"]) =>
-    (e: { target: { value: string } }) => {
-      const v = e.target.value;
-      update((d) => ({
-        ...d,
-        projects: d.projects.map((r, j) =>
-          j === i ? { ...r, links: { ...r.links, [k]: v } } : r,
-        ),
-      }));
-    };
-  const onProjTech = (i: number, v: string[]) =>
-    update((d) => ({
-      ...d,
-      projects: d.projects.map((r, j) => (j === i ? { ...r, tech: v } : r)),
-    }));
+  const setEntries = useCallback(
+    <K extends "experiences" | "projects" | "education" | "oss">(
+      field: K,
+      fn: (entries: Draft[K]) => Draft[K],
+      ...prefixes: string[]
+    ) => {
+      edit((next) => {
+        next[field] = fn([...next[field]] as Draft[K]);
+      }, ...prefixes);
+    },
+    [edit],
+  );
 
-  const addEdu = () => update((d) => ({ ...d, education: [...d.education, blankEdu()] }));
-  const dropEdu = (i: number) =>
-    update((d) => ({ ...d, education: d.education.filter((_, j) => j !== i) }));
-  const onEdu =
-    (i: number, k: keyof EduRow) =>
-    (e: { target: { value: string } }) => {
-      const v = e.target.value;
-      update((d) => ({
-        ...d,
-        education: d.education.map((r, j) => (j === i ? Object.assign({}, r, { [k]: v }) : r)),
-      }));
-    };
+  const addEntry = useCallback(
+    (
+      field: "experiences" | "projects" | "education" | "oss",
+      make: () => unknown,
+      errorsKey: string,
+    ) => {
+      edit((next) => {
+        (next[field] as unknown[]).push(make());
+      }, `${errorsKey}.`);
+    },
+    [edit],
+  );
 
-  const addOss = () => update((d) => ({ ...d, oss: [...d.oss, blankOss()] }));
-  const dropOss = (i: number) =>
-    update((d) => ({ ...d, oss: d.oss.filter((_, j) => j !== i) }));
-  const onOss =
-    (i: number, k: keyof OssRow) =>
-    (e: { target: { value: string } }) => {
-      const v = e.target.value;
-      update((d) => ({
-        ...d,
-        oss: d.oss.map((r, j) => (j === i ? Object.assign({}, r, { [k]: v }) : r)),
-      }));
-    };
-  const onOssTech = (i: number, v: string[]) =>
-    update((d) => ({ ...d, oss: d.oss.map((r, j) => (j === i ? { ...r, tech: v } : r)) }));
+  const removeEntry = useCallback(
+    (
+      index: number,
+      field: "experiences" | "projects" | "education" | "oss",
+      errorsKey: string,
+    ) => {
+      edit((next) => {
+        next[field as "experiences"] = (
+          next[field] as unknown[]
+        ).filter((_unused, i) => i !== index) as never;
+      }, `${errorsKey}.`);
+    },
+    [edit],
+  );
 
-  const autofill = () =>
-    update((d) => fillEmpty(d, SAMPLES[step] ?? {}));
+  const goTo = useCallback((target: number) => {
+    const clamped = Math.min(Math.max(target, 1), STEPS.length);
+    setBack(clamped < stepRef.current);
+    setStep(clamped);
+    setMaxStep((current) => Math.max(current, clamped));
+    setErrors({});
+    setFormError("");
+  }, []);
 
-  const lookup = async () => {
-    const email = draftRef.current.email.trim();
-    if (!EMAIL_RE.test(email) || lookupBusy) return;
-    setLookupBusy(true);
-    setLookupMsg(null);
+  const autofill = useCallback(() => {
+    setDraft((current) => {
+      const merged: Draft = { ...current };
+      for (const [key, value] of Object.entries(AUTOFILL_DRAFT)) {
+        if (key === "step") continue;
+        const existing = (merged as unknown as Record<string, unknown>)[key];
+        if (Array.isArray(value)) {
+          if (!Array.isArray(existing) || existing.length === 0) {
+            (merged as unknown as Record<string, unknown>)[key] = value.map(
+              (item) =>
+                item && typeof item === "object" ? { ...item } : item,
+            );
+          }
+          continue;
+        }
+        if (typeof value === "boolean") {
+          if (existing !== true) {
+            (merged as unknown as Record<string, unknown>)[key] = value;
+          }
+          continue;
+        }
+        if (typeof value === "string" && existing === "") {
+          (merged as unknown as Record<string, unknown>)[key] = value;
+        }
+      }
+      return merged;
+    });
+    setErrors({});
+    setFormError("");
+    setLookupMsg("");
+    setLookupState("idle");
+  }, []);
+
+  const runLookup = useCallback(async () => {
+    const email = draft.email.trim();
+    if (!email) {
+      setLookupState("idle");
+      setLookupMsg("");
+      return;
+    }
+    setLookupState("checking");
+    setLookupMsg("Checking...");
     try {
-      const res = await fetch("/api/candidates/lookup", {
+      const response = await fetch("/api/candidates/lookup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
       });
-      const body = (await res.json().catch(() => null)) as {
-        exists?: unknown;
-        error?: string;
-      } | null;
-      if (res.status === 429) {
+      if (response.status === 429) {
+        setLookupState("failed");
         setLookupMsg("Too many checks in a short window - try again shortly.");
         return;
       }
-      if (!res.ok) {
-        setLookupMsg(body?.error ?? "Lookup failed - try again.");
+      if (!response.ok) {
+        setLookupState("failed");
+        setLookupMsg("Lookup failed - try again.");
         return;
       }
-      if (body?.exists === true) {
+      const body = (await response.json()) as { found?: boolean };
+      if (body.found) {
+        setLookupState("found");
         setLookupMsg(
           "A visible page already exists for this email - publishing hands control of it back to you.",
         );
       } else {
+        setLookupState("missing");
         setLookupMsg("No page yet for this email - you are clear to publish.");
       }
     } catch {
+      setLookupState("failed");
       setLookupMsg("Network error - try again.");
-    } finally {
-      setLookupBusy(false);
     }
-  };
+  }, [draft.email]);
 
-  const parseNow = () => {
-    const parsed = candidateSchema.safeParse(buildPayload(draftRef.current));
-    const map = parsed.success ? {} : toFieldErrors(parsed.error);
-    setErrs(map);
-    return map;
-  };
-
-  /** Open the password-claim step after publish (no network round trip). */
-  const startClaim = (
-    candidateId: string,
-    mode: "created" | "exists",
-    message: string,
-    warnings: string[],
-  ) => {
-    setClaimPending({ candidateId, mode, message, warnings });
-    setClaimPassword("");
-    setClaimConfirm("");
-    setClaimErr(null);
-  };
-
-  const submitClaim = async () => {
-    if (!claimPending || claimBusy) return;
-    const email = draftRef.current.email.trim();
-    if (claimPassword.length < 8) {
-      setClaimErr("Password must be at least 8 characters.");
-      return;
-    }
-    if (claimPassword.length > 200) {
-      setClaimErr("Password must be at most 200 characters.");
-      return;
-    }
-    if (claimPassword !== claimConfirm) {
-      setClaimErr("Passwords do not match.");
-      return;
-    }
-    setClaimBusy(true);
-    setClaimErr(null);
-    try {
-      const res = await fetch("/api/auth/claim", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password: claimPassword }),
-      });
-      const body = (await res.json().catch(() => null)) as {
-        ok?: unknown;
-        email?: unknown;
-        error?: string;
-      } | null;
-      if (!res.ok || body?.ok !== true) {
-        setClaimErr(body?.error ?? "Could not set your password - try again.");
+  const nextFrom = useCallback(
+    (target: number) => {
+      const result = validateStep(target, draft);
+      if (Object.keys(result).length === 0) {
+        goTo(target + 1);
         return;
       }
-      const { candidateId, mode, message, warnings } = claimPending;
-      setClaimPending(null);
-      setClaimPassword("");
-      setClaimConfirm("");
-      setClaimErr(null);
-      window.dispatchEvent(new Event(SESSION_EVENT));
-      if (mode === "created") {
-        setDone({ id: candidateId, warnings });
-        return;
-      }
-      setNotice(message || "A visible profile already exists for this email.");
-      setNoticeId(candidateId);
-    } catch {
-      setClaimErr("Network error - try again.");
-    } finally {
-      setClaimBusy(false);
-    }
-  };
+      setErrors(result);
+      setFormError("Please fix the highlighted fields to continue.");
+    },
+    [draft, goTo],
+  );
 
-  const publish = async () => {
-    setBusy(true);
-    setNotice(null);
-    setNoticeId(null);
-    try {
-      const res = await fetch("/api/candidates", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(buildPayload(draftRef.current)),
-      });
-      const body = (await res.json().catch(() => null)) as {
-        candidateId?: string;
-        warnings?: string[];
-        error?: string;
-        errors?: unknown;
-      } | null;
-
-      if (res.status === 400 && body?.errors) {
-        const map = fromFlat(body.errors);
-        setErrs(map);
-        const keys = Object.keys(map);
-        if (keys.length) {
-          setDir(-1);
-          setStep(stepOf(keys[0].split(".")[0]));
+  const claimAndFinish = useCallback(
+    async (
+      cid: string,
+      result: PublishResult,
+      email: string,
+      pw: string,
+    ) => {
+      try {
+        const response = await fetch("/api/auth/claim", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password: pw }),
+        });
+        if (response.ok) {
+          clearDraft();
+          setPublished(result);
+          router.refresh();
+          return;
         }
-        setNotice("Fix the highlighted fields.");
+        const body = (await response.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        setPublished(result);
+        setFormError(
+          `${body?.error ?? "Your page is live, but signing in failed."} Your page is at ${cid} - your draft is safe on this device.`,
+        );
+      } catch {
+        setPublished(result);
+        setFormError(
+          `Your page is live, but signing in failed. Your page is at ${cid} - your draft is safe on this device.`,
+        );
+      }
+    },
+    [router],
+  );
+
+  const publish = useCallback(async () => {
+    const accountErrors = validateAccount(draft, password, confirm);
+    if (Object.keys(accountErrors).length > 0) {
+      setErrors(accountErrors);
+      setFormError("Please fix the highlighted fields to continue.");
+      return;
+    }
+    const payload = buildPayload(draft);
+    const parsed = parseCandidate(draft);
+    if (!parsed.success) {
+      const bad = payloadErrors(parsed.error);
+      const target = stepForKey(Object.keys(bad)[0] ?? "");
+      if (target === 7) {
+        setErrors(accountErrors);
+        setFormError(
+          "Some details are still incomplete - check the highlighted fields.",
+        );
+        goTo(7);
+        setErrors(accountErrors);
         return;
       }
-      if (res.status === 429) {
-        setNotice(
-          "Submission rate limit - wait a couple of minutes, your draft is safe on this device.",
+      const targetErrors = validateStep(target, draft);
+      setFormError(
+        "Some details are still incomplete - check the highlighted fields.",
+      );
+      goTo(target);
+      setErrors(targetErrors);
+      return;
+    }
+    setPending(true);
+    setFormError("");
+    try {
+      const response = await fetch("/api/candidates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const body = (await response.json().catch(() => null)) as {
+        candidateId?: string;
+        pageId?: string;
+        id?: string;
+        error?: string;
+        errors?: Record<string, string>;
+        warnings?: string[];
+      } | null;
+      if (response.status === 400) {
+        const serverMap = body?.errors ?? {};
+        const first = Object.keys(serverMap)[0] ?? "";
+        const target = stepForKey(first);
+        const merged: StepErrors = {
+          ...validateStep(target, draft),
+          ...serverMap,
+        };
+        setFormError(
+          "Some details are still incomplete - check the highlighted fields.",
+        );
+        goTo(target);
+        setErrors(merged);
+        return;
+      }
+      const cid = body?.candidateId ?? body?.pageId ?? body?.id;
+      if (response.status === 409 || response.status === 429) {
+        if (cid) {
+          const result: PublishResult = {
+            id: cid,
+            existed: response.status === 409,
+            warnings: Array.isArray(body?.warnings) ? body.warnings : [],
+          };
+          await claimAndFinish(cid, result, draft.email, password);
+          return;
+        }
+        setFormError(
+          response.status === 429
+            ? "Submission rate limit - wait a couple of minutes, your draft is safe on this device."
+            : body?.error ?? "Publish failed - try again.",
         );
         return;
       }
-      if (res.status === 409 && body?.candidateId) {
-        startClaim(
-          body.candidateId,
-          "exists",
-          body.error ?? "A visible profile already exists for this email.",
-          [],
-        );
+      if (!response.ok || !cid) {
+        setFormError(body?.error ?? "Publish failed - try again.");
         return;
       }
-      if (res.status === 202 && body?.candidateId) {
-        startClaim(
-          body.candidateId,
-          "created",
-          "",
-          Array.isArray(body.warnings) ? body.warnings : [],
-        );
-        return;
-      }
-      setNotice(body?.error ?? "Publish failed - try again.");
+      const result: PublishResult = {
+        id: cid,
+        existed: false,
+        warnings: Array.isArray(body?.warnings) ? body.warnings : [],
+      };
+      await claimAndFinish(cid, result, draft.email, password);
     } catch {
-      setNotice("Network error - your draft is safe on this device.");
+      setFormError("Network error - your draft is safe on this device.");
     } finally {
-      setBusy(false);
+      setPending(false);
     }
-  };
+  }, [claimAndFinish, confirm, draft, goTo, password]);
 
-  const goNext = () => {
-    const map = parseNow();
-    const mine = Object.keys(map).filter((k) => stepOf(k.split(".")[0]) === step);
-    if (mine.length) return;
-    if (step < STEPS.length - 1) {
-      const next = step + 1;
-      setDir(1);
-      setStep(next);
-      setMaxStep((m) => Math.max(m, next));
-      return;
-    }
-    const keys = Object.keys(map);
-    if (keys.length) {
-      const target = stepOf(keys[0].split(".")[0]);
-      setDir(target < step ? -1 : 1);
-      setStep(target);
-      return;
-    }
-    void publish();
-  };
+  const onSubmit = useCallback(
+    (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      if (pending) return;
+      if (published) return;
+      if (step >= STEPS.length) {
+        void publish();
+        return;
+      }
+      nextFrom(step);
+    },
+    [nextFrom, pending, publish, published, step],
+  );
 
-  const back = () => {
-    setDir(-1);
-    setStep((s) => Math.max(0, s - 1));
-  };
+  const onKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLFormElement>) => {
+      if (event.key !== "Enter") return;
+      const target = event.target as HTMLElement;
+      if (target instanceof HTMLTextAreaElement) return;
+      if (target.isContentEditable) return;
+      if (target.getAttribute("role") === "combobox") return;
+      if (target instanceof HTMLButtonElement) {
+        if (target.type === "submit" || target.type === "button") return;
+      }
+      event.preventDefault();
+      if (pending || published) return;
+      if (step >= STEPS.length) void publish();
+      else nextFrom(step);
+    },
+    [nextFrom, pending, publish, published, step],
+  );
 
-  const jump = (i: number) => {
-    if (i > maxStep) return;
-    setDir(i < step ? -1 : 1);
-    setStep(i);
-  };
-
-  if (done) {
+  if (published) {
     return (
-      <div className="rounded-2xl bg-surface shadow-soft-md p-7 sm:p-10 text-center">
-        <div className="w-12 h-12 rounded-full bg-brand-soft text-brand-text grid place-items-center mx-auto">
-          <Check size={22} aria-hidden="true" />
-        </div>
-        <h2 className="mt-4 text-[24px] font-semibold text-ink tracking-[-0.02em]">
-          Your page is live.
-        </h2>
-        <p className="mt-2.5 text-[15px] leading-[1.6] text-body max-w-[46ch] mx-auto">
-          {draft.visibility === "visible"
-            ? "It is listed for employer searches right away."
-            : "It is unlisted - reachable only by direct link."}{" "}
-          Change anything later; your draft lives on this device.
-        </p>
-        {done.warnings.length ? (
-          <div className="notice notice-warn mt-5 text-left" role="status">
-            <Info aria-hidden="true" />
-            <span>
-              Published with notes:
-              <ul className="list-disc pl-4 mt-1 grid gap-0.5">
-                {done.warnings.map((w) => (
-                  <li key={w}>{w}</li>
-                ))}
-              </ul>
-            </span>
-          </div>
-        ) : null}
-        <div className="flex flex-wrap items-center justify-center gap-3 mt-7">
-          <Link href={`/talent/${done.id}`} className="btn btn-primary press">
-            View your page <ArrowRight size={16} aria-hidden="true" />
-          </Link>
-          <button
-            type="button"
-            className="btn btn-secondary press"
-            onClick={() => {
-              setDone(null);
-              setStep(STEPS.length - 1);
-            }}
+      <div
+        className="rounded-2xl bg-surface p-5 shadow-soft-md sm:p-8"
+        ref={cardRef}
+      >
+        <div
+          className="mb-5 flex h-11 w-11 items-center justify-center rounded-full"
+          style={{ background: "var(--success)" }}
+        >
+          <svg
+            viewBox="0 0 24 24"
+            width="22"
+            height="22"
+            fill="none"
+            stroke="#fff"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
           >
-            Back to review
-          </button>
+            <path d="M20 6 9 17l-5-5" />
+          </svg>
+        </div>
+        <h1 className="text-[clamp(1.35rem,2.6vw,1.75rem)] font-semibold tracking-[-0.02em] text-ink">
+          Your page is live.
+        </h1>
+        <p className="mt-1.5 text-[14.5px] text-muted">
+          {published.existed
+            ? "A page for this email already existed - publishing handed control of it back to you."
+            : "Your page starts unlisted - reachable only by direct link. You can update it any time."}
+        </p>
+        {published.warnings.length > 0 && (
+          <div className="notice mt-5" role="status">
+            <strong>Worth knowing</strong>
+            <ul className="mt-1.5 list-disc pl-5">
+              {published.warnings.map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {formError && (
+          <p className="field-error mt-5" role="alert">
+            {formError}
+          </p>
+        )}
+        <div className="mt-7 flex flex-wrap items-center gap-3 border-t border-line pt-5">
+          <Link href={`/talent/${published.id}`} className="btn btn-primary">
+            View your page
+          </Link>
+          <Link href="/" className="btn btn-secondary">
+            Back to home
+          </Link>
         </div>
       </div>
     );
   }
 
-  const renderStep = (): ReactNode => {
-    switch (step) {
-      case 0:
-        return (
-          <>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <F label="Full name" htmlFor="j-name" req error={errs.name}>
-                <input
-                  id="j-name"
-                  className="input"
-                  value={draft.name}
-                  onChange={str("name")}
-                  placeholder="Aarav Sharma"
-                  autoComplete="name"
-                  aria-invalid={errs.name ? true : undefined}
-                />
-              </F>
-              <F
-                label="Email"
-                htmlFor="j-email"
-                req
-                error={errs.email}
-                hint="Becomes your contact email automatically."
-              >
-                <input
-                  id="j-email"
-                  className="input"
-                  type="email"
-                  value={draft.email}
-                  onChange={str("email")}
-                  placeholder="you@example.com"
-                  autoComplete="email"
-                  aria-invalid={errs.email ? true : undefined}
-                />
-              </F>
-              <F label="Phone" htmlFor="j-phone" error={errs.phone} hint="Optional.">
-                <input
-                  id="j-phone"
-                  className="input"
-                  type="tel"
-                  value={draft.phone}
-                  onChange={str("phone")}
-                  placeholder="+91 98765 43210"
-                />
-              </F>
-              <F label="City" htmlFor="j-loc" req error={errs.location}>
-                <PickCombo
-                  id="j-loc"
-                  value={draft.location}
-                  options={LOCATIONS}
-                  onChange={pick("location")}
-                  placeholder="Bengaluru"
-                  invalid={!!errs.location}
-                />
-              </F>
-              <div className="sm:col-span-2">
-                <F
-                  label="Photo URL"
-                  htmlFor="j-photo"
-                  error={errs.photo_url}
-                  hint="Direct image link - shown as your avatar."
-                >
-                  <input
-                    id="j-photo"
-                    className="input"
-                    type="url"
-                    value={draft.photo_url}
-                    onChange={str("photo_url")}
-                    placeholder="https://…"
-                  />
-                </F>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3 mt-5 pt-5 border-t border-line">
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm press"
-                onClick={() => void lookup()}
-                disabled={lookupBusy || !EMAIL_RE.test(draft.email.trim())}
-              >
-                {lookupBusy ? (
-                  <Loader2 size={14} className="animate-spin" aria-hidden="true" />
-                ) : (
-                  <Search size={14} aria-hidden="true" />
-                )}
-                Check for an existing page
-              </button>
-              {lookupMsg ? (
-                <p className="text-[13.5px] text-body">
-                  {lookupMsg}
-                </p>
-              ) : (
-                <span className="field-hint">
-                  Publishing twice for the same email returns the existing page to you.
-                </span>
-              )}
-            </div>
-          </>
-        );
-
-      case 1:
-        return (
-          <div className="grid gap-4 sm:grid-cols-2">
-            <F label="Desired role" htmlFor="p-role" req error={errs.role}>
-              <PickCombo
-                id="p-role"
-                value={draft.role}
-                options={ROLE_SUGGESTIONS}
-                onChange={pick("role")}
-                placeholder="Backend Engineer"
-                invalid={!!errs.role}
-              />
-            </F>
-            <F
-              label="Current role"
-              htmlFor="p-current"
-              hint="Optional - shown under your name."
-            >
-              <PickCombo
-                id="p-current"
-                value={draft.current_role}
-                options={ROLE_SUGGESTIONS}
-                onChange={pick("current_role")}
-                placeholder="SDE II at Paystream"
-              />
-            </F>
-            <F label="Domain" htmlFor="p-domain" req error={errs.domain}>
-              <select
-                id="p-domain"
-                className="select"
-                value={draft.domain}
-                onChange={str("domain")}
-              >
-                {DOMAINS.map((d) => (
-                  <option key={d} value={d}>
-                    {d}
-                  </option>
-                ))}
-              </select>
-            </F>
-            <F
-              label="Years of experience"
-              htmlFor="p-exp"
-              error={errs.exp}
-              hint="0 – 50."
-            >
-              <PickCombo
-                id="p-exp"
-                value={draft.exp}
-                options={EXP_SUGGESTIONS}
-                onChange={pick("exp")}
-                placeholder="4"
-                inputMode="decimal"
-                invalid={!!errs.exp}
-              />
-            </F>
-            <div className="sm:col-span-2">
-              <F
-                label="Headline"
-                htmlFor="p-headline"
-                hint="One line about what you are about. Max 220 characters."
-              >
-                <input
-                  id="p-headline"
-                  className="input"
-                  value={draft.headline}
-                  onChange={str("headline")}
-                  maxLength={220}
-                  placeholder="Payments, ledgers, and the occasional postmortem."
-                />
-              </F>
-            </div>
-            <div className="sm:col-span-2">
-              <SkillPicker
-                id="p-skills"
-                label="Skills"
-                required
-                hint="The terms employers search by - normalized to canonical names."
-                placeholder="+ Add skill…"
-                error={errs.skills}
-                value={draft.skills}
-                onChange={(v) => {
-                  update((d) => ({ ...d, skills: v }));
-                  clearErr("skills");
-                }}
-              />
-              <div className="flex flex-wrap items-center gap-2 mt-3">
-                <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted mr-1">
-                  Suggestions
-                </span>
-                {SKILL_SUGGESTIONS.map((s) => {
-                  const on = draft.skills.some(
-                    (x) => x.toLowerCase() === s.toLowerCase(),
-                  );
-                  return (
-                    <button
-                      key={s}
-                      type="button"
-                      className={`chip-toggle ${on ? "is-on" : ""}`}
-                      aria-pressed={on}
-                      onClick={() => toggleSkill(s)}
-                    >
-                      {on ? null : <span aria-hidden="true">+</span>}
-                      {s}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        );
-
-      case 2:
-        return (
-          <>
-            {draft.experiences.length === 0 ? (
-              <div className="empty-note">
-                No roles added yet - add one, or continue if your path is still
-                taking shape.
-              </div>
-            ) : (
-              <div className="grid gap-5">
-                {draft.experiences.map((row, i) => (
-                  <RowShell
-                    key={`exp-${i}`}
-                    label={`Role ${i + 1}`}
-                    onRemove={() => dropExp(i)}
-                  >
-                    <F
-                      label="Company"
-                      htmlFor={`exp-${i}-company`}
-                      req
-                      error={errs[`experiences.${i}.company`]}
-                    >
-                      <input
-                        id={`exp-${i}-company`}
-                        className="input"
-                        value={row.company}
-                        onChange={onExp(i, "company")}
-                        placeholder="Paystream"
-                      />
-                    </F>
-                    <F
-                      label="Title"
-                      htmlFor={`exp-${i}-title`}
-                      req
-                      error={errs[`experiences.${i}.title`]}
-                    >
-                      <input
-                        id={`exp-${i}-title`}
-                        className="input"
-                        value={row.title}
-                        onChange={onExp(i, "title")}
-                        placeholder="Software Engineer II"
-                      />
-                    </F>
-                    <F label="Start" htmlFor={`exp-${i}-start`} hint="2022-04 or Apr 2022.">
-                      <input
-                        id={`exp-${i}-start`}
-                        className="input"
-                        value={row.start_date}
-                        onChange={onExp(i, "start_date")}
-                        placeholder="2022-04"
-                      />
-                    </F>
-                    <F label="End" htmlFor={`exp-${i}-end`} hint="Blank if current.">
-                      <input
-                        id={`exp-${i}-end`}
-                        className="input"
-                        value={row.end_date}
-                        onChange={onExp(i, "end_date")}
-                        placeholder="2025-01"
-                        disabled={row.current}
-                      />
-                    </F>
-                    <label className="check sm:col-span-2">
-                      <input type="checkbox" checked={row.current} onChange={onExpBool(i)} />
-                      <span>I still work here</span>
-                    </label>
-                    <div className="sm:col-span-2">
-                      <F label="What you did" htmlFor={`exp-${i}-desc`}>
-                        <textarea
-                          id={`exp-${i}-desc`}
-                          className="textarea"
-                          value={row.description}
-                          onChange={onExp(i, "description")}
-                          maxLength={4000}
-                        />
-                      </F>
-                    </div>
-                    <div className="sm:col-span-2">
-                      <F
-                        label="Achievements"
-                        htmlFor={`exp-${i}-ach`}
-                        hint="One per line."
-                      >
-                        <textarea
-                          id={`exp-${i}-ach`}
-                          className="textarea"
-                          value={row.achievements}
-                          onChange={onExp(i, "achievements")}
-                          maxLength={4000}
-                        />
-                      </F>
-                    </div>
-                    <div className="sm:col-span-2">
-                      <SkillPicker
-                        id={`exp-${i}-tech`}
-                        label="Tech used"
-                        placeholder="+ Add tech…"
-                        value={row.tech}
-                        onChange={(v) => onExpTech(i, v)}
-                      />
-                    </div>
-                  </RowShell>
-                ))}
-              </div>
-            )}
-            <button type="button" className="btn btn-secondary press mt-4" onClick={addExp}>
-              <Plus size={16} aria-hidden="true" /> Add role
-            </button>
-          </>
-        );
-
-      case 3:
-        return (
-          <>
-            {draft.projects.length === 0 ? (
-              <div className="empty-note">
-                No projects yet - one real project with your part spelled out
-                does more than a list of ten.
-              </div>
-            ) : (
-              <div className="grid gap-5">
-                {draft.projects.map((row, i) => (
-                  <RowShell
-                    key={`proj-${i}`}
-                    label={`Project ${i + 1}`}
-                    onRemove={() => dropProj(i)}
-                  >
-                    <F
-                      label="Title"
-                      htmlFor={`proj-${i}-title`}
-                      req
-                      error={errs[`projects.${i}.title`]}
-                    >
-                      <input
-                        id={`proj-${i}-title`}
-                        className="input"
-                        value={row.title}
-                        onChange={onProj(i, "title")}
-                        placeholder="Ledger reconciliation engine"
-                      />
-                    </F>
-                    <F label="Your role" htmlFor={`proj-${i}-role`}>
-                      <input
-                        id={`proj-${i}-role`}
-                        className="input"
-                        value={row.role}
-                        onChange={onProj(i, "role")}
-                        placeholder="Backend owner"
-                      />
-                    </F>
-                    <div className="sm:col-span-2">
-                      <F
-                        label="Description"
-                        htmlFor={`proj-${i}-desc`}
-                        req
-                        error={errs[`projects.${i}.description`]}
-                      >
-                        <textarea
-                          id={`proj-${i}-desc`}
-                          className="textarea"
-                          value={row.description}
-                          onChange={onProj(i, "description")}
-                          maxLength={4000}
-                          placeholder="What it does and why it mattered."
-                        />
-                      </F>
-                    </div>
-                    <div className="sm:col-span-2">
-                      <F label="Problem it solved" htmlFor={`proj-${i}-problem`}>
-                        <textarea
-                          id={`proj-${i}-problem`}
-                          className="textarea"
-                          value={row.problem}
-                          onChange={onProj(i, "problem")}
-                          maxLength={2000}
-                        />
-                      </F>
-                    </div>
-                    <F label="Project type" htmlFor={`proj-${i}-type`} hint="Personal, academic, freelance, production, open source, prototype.">
-                      <select
-                        id={`proj-${i}-type`}
-                        className="select"
-                        value={row.project_type}
-                        onChange={onProj(i, "project_type")}
-                      >
-                        <option value="">Not specified</option>
-                        {PROJECT_TYPES.map((t) => (
-                          <option key={t.v} value={t.v}>
-                            {t.label}
-                          </option>
-                        ))}
-                        {row.project_type &&
-                        !PROJECT_TYPES.some((t) => t.v === row.project_type) ? (
-                          <option value={row.project_type}>
-                            {row.project_type}
-                          </option>
-                        ) : null}
-                      </select>
-                    </F>
-                    <div className="sm:col-span-2">
-                      <SkillPicker
-                        id={`proj-${i}-tech`}
-                        label="Tech"
-                        value={row.tech}
-                        onChange={(v) => onProjTech(i, v)}
-                        placeholder="Add tech…"
-                      />
-                    </div>
-                    <div className="sm:col-span-2 grid gap-3 sm:grid-cols-3">
-                      <F label="Live URL" htmlFor={`proj-${i}-live`} error={errs[`projects.${i}.links.live`]}>
-                        <input
-                          id={`proj-${i}-live`}
-                          className="input"
-                          value={row.links.live}
-                          onChange={onProjLink(i, "live")}
-                          placeholder="https://…"
-                        />
-                      </F>
-                      <F label="Repo URL" htmlFor={`proj-${i}-repo`} error={errs[`projects.${i}.links.repo`]}>
-                        <input
-                          id={`proj-${i}-repo`}
-                          className="input"
-                          value={row.links.repo}
-                          onChange={onProjLink(i, "repo")}
-                          placeholder="https://…"
-                        />
-                      </F>
-                      <F label="Demo URL" htmlFor={`proj-${i}-demo`} error={errs[`projects.${i}.links.demo`]}>
-                        <input
-                          id={`proj-${i}-demo`}
-                          className="input"
-                          value={row.links.demo}
-                          onChange={onProjLink(i, "demo")}
-                          placeholder="https://…"
-                        />
-                      </F>
-                    </div>
-                    <div className="sm:col-span-2">
-                      <details className="judge">
-                        <summary>
-                          Impact &amp; detail <ChevronRightPlaceholder />
-                        </summary>
-                        <div className="grid gap-4 mt-4">
-                          <F label="Impact" htmlFor={`proj-${i}-impact`}>
-                            <textarea
-                              id={`proj-${i}-impact`}
-                              className="textarea"
-                              value={row.impact}
-                              onChange={onProj(i, "impact")}
-                              maxLength={2000}
-                            />
-                          </F>
-                          <F label="Users / scale" htmlFor={`proj-${i}-scale`} hint="40k MAU, 12 teams…">
-                            <input
-                              id={`proj-${i}-scale`}
-                              className="input"
-                              value={row.users_scale}
-                              onChange={onProj(i, "users_scale")}
-                              placeholder="40k accounts"
-                            />
-                          </F>
-                          <F label="Hardest challenge" htmlFor={`proj-${i}-hard`}>
-                            <textarea
-                              id={`proj-${i}-hard`}
-                              className="textarea"
-                              value={row.hardest_challenge}
-                              onChange={onProj(i, "hardest_challenge")}
-                              maxLength={2000}
-                            />
-                          </F>
-                          <F label="Your contribution" htmlFor={`proj-${i}-contrib`}>
-                            <textarea
-                              id={`proj-${i}-contrib`}
-                              className="textarea"
-                              value={row.personal_contribution}
-                              onChange={onProj(i, "personal_contribution")}
-                              maxLength={2000}
-                            />
-                          </F>
-                        </div>
-                      </details>
-                    </div>
-                  </RowShell>
-                ))}
-              </div>
-            )}
-            <button type="button" className="btn btn-secondary press mt-4" onClick={addProj}>
-              <Plus size={16} aria-hidden="true" /> Add project
-            </button>
-          </>
-        );
-
-      case 4:
-        return (
-          <div className="grid gap-8">
-            <div>
-              <h3 className="text-[15.5px] font-semibold text-ink mb-4">Education</h3>
-              {draft.education.length === 0 ? (
-                <div className="empty-note">No entries yet - safe to skip.</div>
-              ) : (
-                <div className="grid gap-5">
-                  {draft.education.map((row, i) => (
-                    <RowShell
-                      key={`edu-${i}`}
-                      label={`Education ${i + 1}`}
-                      onRemove={() => dropEdu(i)}
-                    >
-                      <F
-                        label="Institution"
-                        htmlFor={`edu-${i}-inst`}
-                        req
-                        error={errs[`education.${i}.institution`]}
-                      >
-                        <input
-                          id={`edu-${i}-inst`}
-                          className="input"
-                          value={row.institution}
-                          onChange={onEdu(i, "institution")}
-                          placeholder="Visvesvaraya Technological University"
-                        />
-                      </F>
-                      <F label="Degree" htmlFor={`edu-${i}-deg`}>
-                        <PickSelect
-                          id={`edu-${i}-deg`}
-                          value={row.degree}
-                          options={DEGREE_SUGGESTIONS}
-                          onChange={(v) =>
-                            onEdu(i, "degree")({ target: { value: v } })
-                          }
-                          placeholder="Not specified"
-                        />
-                      </F>
-                      <F label="Field" htmlFor={`edu-${i}-field`}>
-                        <PickSelect
-                          id={`edu-${i}-field`}
-                          value={row.field}
-                          options={FIELD_SUGGESTIONS}
-                          onChange={(v) =>
-                            onEdu(i, "field")({ target: { value: v } })
-                          }
-                          placeholder="Not specified"
-                        />
-                      </F>
-                      <F label="Years" htmlFor={`edu-${i}-years`} hint="2018 – 2022.">
-                        <input
-                          id={`edu-${i}-years`}
-                          className="input"
-                          value={row.years}
-                          onChange={onEdu(i, "years")}
-                          placeholder="2018 – 2022"
-                        />
-                      </F>
-                      <div className="sm:col-span-2">
-                        <F label="Achievements" htmlFor={`edu-${i}-ach`}>
-                          <textarea
-                            id={`edu-${i}-ach`}
-                            className="textarea"
-                            value={row.achievements}
-                            onChange={onEdu(i, "achievements")}
-                            maxLength={2000}
-                          />
-                        </F>
-                      </div>
-                    </RowShell>
-                  ))}
-                </div>
-              )}
-              <button type="button" className="btn btn-secondary btn-sm press mt-4" onClick={addEdu}>
-                <Plus size={14} aria-hidden="true" /> Add education
-              </button>
-            </div>
-
-            <div>
-              <h3 className="text-[15.5px] font-semibold text-ink mb-4">Open source</h3>
-              {draft.oss.length === 0 ? (
-                <div className="empty-note">No repos yet - safe to skip.</div>
-              ) : (
-                <div className="grid gap-5">
-                  {draft.oss.map((row, i) => (
-                    <RowShell
-                      key={`oss-${i}`}
-                      label={`Repo ${i + 1}`}
-                      onRemove={() => dropOss(i)}
-                    >
-                      <F
-                        label="Repo name"
-                        htmlFor={`oss-${i}-name`}
-                        req
-                        error={errs[`oss.${i}.repo_name`]}
-                      >
-                        <input
-                          id={`oss-${i}-name`}
-                          className="input"
-                          value={row.repo_name}
-                          onChange={onOss(i, "repo_name")}
-                          placeholder="pg-migrate-lite"
-                        />
-                      </F>
-                      <F label="Role" htmlFor={`oss-${i}-role`} hint="Maintainer, contributor…">
-                        <PickSelect
-                          id={`oss-${i}-role`}
-                          value={row.role}
-                          options={OSS_ROLES}
-                          onChange={(v) =>
-                            onOss(i, "role")({ target: { value: v } })
-                          }
-                          placeholder="Not specified"
-                        />
-                      </F>
-                      <div className="sm:col-span-2">
-                        <F
-                          label="Repo URL"
-                          htmlFor={`oss-${i}-url`}
-                          error={errs[`oss.${i}.repo_url`]}
-                        >
-                          <input
-                            id={`oss-${i}-url`}
-                            className="input"
-                            value={row.repo_url}
-                            onChange={onOss(i, "repo_url")}
-                            placeholder="https://github.com/…"
-                          />
-                        </F>
-                      </div>
-                      <div className="sm:col-span-2">
-                        <F label="What it is" htmlFor={`oss-${i}-desc`}>
-                          <textarea
-                            id={`oss-${i}-desc`}
-                            className="textarea"
-                            value={row.description}
-                            onChange={onOss(i, "description")}
-                            maxLength={4000}
-                          />
-                        </F>
-                      </div>
-                      <div className="sm:col-span-2">
-                        <SkillPicker
-                          id={`oss-${i}-tech`}
-                          label="Tech"
-                          placeholder="+ Add tech…"
-                          value={row.tech}
-                          onChange={(v) => onOssTech(i, v)}
-                        />
-                      </div>
-                    </RowShell>
-                  ))}
-                </div>
-              )}
-              <button type="button" className="btn btn-secondary btn-sm press mt-4" onClick={addOss}>
-                <Plus size={14} aria-hidden="true" /> Add repo
-              </button>
-            </div>
-          </div>
-        );
-
-      case 5:
-        return (
-          <div className="grid gap-8">
-            <div>
-              <h3 className="text-[15.5px] font-semibold text-ink mb-4">Reachability</h3>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <SegGroup
-                  label="Availability"
-                  value={draft.availability}
-                  options={
-                    !draft.availability ||
-                    AVAILABILITY_OPTS.some((o) => o.v === draft.availability)
-                      ? AVAILABILITY_OPTS
-                      : [
-                          ...AVAILABILITY_OPTS,
-                          { v: draft.availability, label: draft.availability },
-                        ]
-                  }
-                  onChange={(v) => update((d) => ({ ...d, availability: v }))}
-                />
-                <F label="Notice period" htmlFor="v-notice" hint="Optional.">
-                  <PickSelect
-                    id="v-notice"
-                    value={draft.notice_period}
-                    options={NOTICE_PERIODS}
-                    onChange={pick("notice_period")}
-                    placeholder="Not specified"
-                  />
-                </F>
-                <F label="Salary expectation" htmlFor="v-salary" error={errs.min_salary} hint="Plain number - your period is chosen below.">
-                  <input
-                    id="v-salary"
-                    className="input"
-                    inputMode="numeric"
-                    value={draft.min_salary}
-                    onChange={str("min_salary")}
-                    placeholder="280000"
-                  />
-                </F>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="field content-start mb-0">
-                    <label className="field-label" htmlFor="v-cur">
-                      Currency
-                    </label>
-                    <select
-                      id="v-cur"
-                      className="select"
-                      value={draft.currency}
-                      onChange={str("currency")}
-                    >
-                      {CURRENCIES.map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="field content-start mb-0">
-                    <label className="field-label" htmlFor="v-freq">
-                      Period
-                    </label>
-                    <select
-                      id="v-freq"
-                      className="select"
-                      value={draft.frequency}
-                      onChange={str("frequency")}
-                    >
-                      {SALARY_FREQUENCIES.map((f) => (
-                        <option key={f} value={f}>
-                          {f === "hourly" ? "Hourly" : f === "yearly" ? "Yearly" : "Monthly"}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-                <F label="Preferred location" htmlFor="v-locref" hint="Type or pick - Remote, Bengaluru…">
-                  <PickCombo
-                    id="v-locref"
-                    value={draft.location_pref}
-                    options={LOCATIONS}
-                    onChange={pick("location_pref")}
-                    placeholder="Remote"
-                  />
-                </F>
-                <SegGroup
-                  label="Work mode"
-                  value={draft.remote_pref}
-                  options={WORK_MODE_OPTS}
-                  onChange={(v) => update((d) => ({ ...d, remote_pref: v }))}
-                />
-                <label className="check">
-                  <input type="checkbox" checked={draft.negotiable} onChange={bool("negotiable")} />
-                  <span>Salary is negotiable</span>
-                </label>
-                <label className="check">
-                  <input type="checkbox" checked={draft.relocation} onChange={bool("relocation")} />
-                  <span>Open to relocating</span>
-                </label>
-              </div>
-            </div>
-
-            <div>
-              <h3 className="text-[15.5px] font-semibold text-ink mb-4">Links</h3>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <F label="GitHub" htmlFor="l-gh" error={errs["links.github"]}>
-                  <input
-                    id="l-gh"
-                    className="input"
-                    value={draft.links.github}
-                    onChange={link("github")}
-                    placeholder="https://github.com/you"
-                  />
-                </F>
-                <F label="LinkedIn" htmlFor="l-li" error={errs["links.linkedin"]}>
-                  <input
-                    id="l-li"
-                    className="input"
-                    value={draft.links.linkedin}
-                    onChange={link("linkedin")}
-                    placeholder="https://linkedin.com/in/you"
-                  />
-                </F>
-                <F label="Portfolio" htmlFor="l-pf" error={errs["links.portfolio"]}>
-                  <input
-                    id="l-pf"
-                    className="input"
-                    value={draft.links.portfolio}
-                    onChange={link("portfolio")}
-                    placeholder="https://you.dev"
-                  />
-                </F>
-                <F label="Resume URL" htmlFor="l-rz" error={errs["links.resume_url"]}>
-                  <input
-                    id="l-rz"
-                    className="input"
-                    value={draft.links.resume_url}
-                    onChange={link("resume_url")}
-                    placeholder="https://…"
-                  />
-                </F>
-              </div>
-            </div>
-
-            <div>
-              <h3 className="text-[15.5px] font-semibold text-ink mb-4">Visibility</h3>
-              <div className="grid gap-3">
-                {(
-                  [
-                    ["visible", "Listed in search", "Appears in employer searches and by direct link."],
-                    ["hidden", "Unlisted", "Reachable only by direct link - never in searches."],
-                  ] as const
-                ).map(([value, title, sub]) => (
-                  <label
-                    key={value}
-                    className="flex items-start gap-3 rounded-2xl border border-line p-4 cursor-pointer"
-                  >
-                    <input
-                      type="radio"
-                      name="visibility"
-                      value={value}
-                      checked={draft.visibility === value}
-                      onChange={() => update((d) => ({ ...d, visibility: value }))}
-                      className="mt-1"
-                    />
-                    <span>
-                      <span className="block text-[14.5px] font-semibold text-ink">{title}</span>
-                      <span className="block text-[13.5px] text-muted mt-0.5">{sub}</span>
-                    </span>
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <h3 className="text-[15.5px] font-semibold text-ink mb-2">
-                What employers see
-              </h3>
-              <p className="field-hint mb-4">
-                Contact channels stay private until you switch them on.
-              </p>
-              <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2 lg:grid-cols-3">
-                {(
-                  [
-                    ["show_email", "Show email"],
-                    ["show_phone", "Show phone"],
-                    ["show_linkedin", "Show LinkedIn"],
-                    ["show_github", "Show GitHub"],
-                    ["show_resume", "Show resume"],
-                    ["show_portfolio", "Show portfolio"],
-                    ["show_photo", "Show photo"],
-                  ] as const
-                ).map(([k, label]) => (
-                  <label className="check" key={k}>
-                    <input type="checkbox" checked={draft[k]} onChange={bool(k)} />
-                    <span>{label}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          </div>
-        );
-
-      default:
-        return (
-          <div className="grid gap-4 sm:grid-cols-2">
-            <ReviewCard title="Basics" onEdit={() => jump(0)}>
-              <p>{draft.name || "-"}</p>
-              <p>{draft.email || "-"}</p>
-              <p>
-                {[draft.location, draft.phone].filter(Boolean).join(" · ") || "-"}
-              </p>
-            </ReviewCard>
-            <ReviewCard title="Profile" onEdit={() => jump(1)}>
-              <p>
-                {[draft.role, draft.domain].filter(Boolean).join(" · ")}
-                {draft.exp ? ` · ${draft.exp} yrs` : ""}
-              </p>
-              {draft.headline ? <p className="text-muted">{draft.headline}</p> : null}
-              {draft.skills.length ? (
-                <div className="flex flex-wrap gap-1.5 mt-1">
-                  {draft.skills.map((s) => (
-                    <span className="tag" key={s}>
-                      {s}
-                    </span>
-                  ))}
-                </div>
-              ) : null}
-            </ReviewCard>
-            <div className="rounded-2xl bg-inset p-5">
-              <div className="flex items-center justify-between gap-3">
-                <h3 className="text-[15px] font-semibold text-ink">Record</h3>
-                <div className="flex gap-3 text-[13px]">
-                  {(["Experience", "Projects", "Background"] as const).map((t, idx) => (
-                    <button
-                      key={t}
-                      type="button"
-                      className="underline text-muted hover:text-brand-text transition-colors"
-                      onClick={() => jump(idx + 2)}
-                    >
-                      {t}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="mt-3 text-[14px] text-body grid gap-1.5">
-                <p>
-                  {draft.experiences.length}{" "}
-                  {draft.experiences.length === 1 ? "role" : "roles"} ·{" "}
-                  {draft.projects.length}{" "}
-                  {draft.projects.length === 1 ? "project" : "projects"}
-                </p>
-                <p>
-                  {draft.education.length} education · {draft.oss.length} open-source
-                </p>
-              </div>
-            </div>
-            <ReviewCard title="Preferences & links" onEdit={() => jump(5)}>
-              <p>
-                {draft.remote_pref === "onsite"
-                  ? "On-site"
-                  : draft.remote_pref === "hybrid"
-                    ? "Hybrid"
-                    : "Remote"}
-                {draft.availability ? ` · ${draft.availability}` : ""}
-                {draft.min_salary
-                  ? ` · ${draft.currency} ${draft.min_salary} / ${draft.frequency}`
-                  : ""}
-              </p>
-              <p className="text-muted">
-                {draft.visibility === "visible" ? "Listed in search" : "Unlisted"} ·{" "}
-                {[
-                  draft.show_email && "email",
-                  draft.show_phone && "phone",
-                  draft.show_linkedin && "LinkedIn",
-                  draft.show_github && "GitHub",
-                  draft.show_resume && "resume",
-                  draft.show_portfolio && "portfolio",
-                  draft.show_photo && "photo",
-                ]
-                  .filter(Boolean)
-                  .join(", ") || "no contact channels public"}
-              </p>
-            </ReviewCard>
-
-            <div className="sm:col-span-2 mt-2 pt-5 border-t border-line">
-              <label className="check">
-                <input
-                  type="checkbox"
-                  checked={draft.consent}
-                  onChange={(e) => {
-                    bool("consent")(e);
-                    clearErr("consent");
-                  }}
-                />
-                <span>
-                  I consent to Tammy processing this profile for matching
-                  purposes.
-                </span>
-              </label>
-              {errs.consent ? (
-                <span className="field-error block mt-2" role="alert">
-                  {errs.consent}
-                </span>
-              ) : null}
-            </div>
-          </div>
-        );
-    }
-  };
-
-  const [stepTitle, stepSub] = STEP_TITLES[step];
+  const title = STEP_TITLES[step] ?? STEP_TITLES[1];
 
   return (
-    <div ref={cardRef} className="rounded-2xl bg-surface shadow-soft-md p-5 sm:p-8">
-
-      <div className="flex items-center justify-between gap-3 mb-5">
-        <span
-          key={step}
-          className="step-count-anim font-mono text-[11.5px] uppercase tracking-[0.14em] text-muted"
-        >
-          Step {step + 1} of {STEPS.length}
+    <div className="rounded-2xl bg-surface p-5 shadow-soft-md sm:p-8">
+      <div className="mb-5 flex items-center justify-between gap-3">
+        <span className="font-mono text-[11.5px] uppercase tracking-[0.14em] text-muted">
+          Step <span className="step-count-anim">{step}</span> of {STEPS.length}
         </span>
-        <span className="flex items-center gap-2" title="Draft autosaves on this device">
+        <span
+          className="flex items-center gap-2"
+          title="Draft autosaves on this device"
+        >
           <span
-            className="pulse-dot inline-block w-2 h-2 rounded-full"
-            style={{ background: "var(--success)" }}
             aria-hidden="true"
+            className="pulse-dot inline-block h-2 w-2 rounded-full"
+            style={{ background: "var(--success)" }}
           />
           <span className="font-mono text-[11.5px] uppercase tracking-[0.14em] text-muted">
-            {!hydrated ? "\u00A0" : saveState === "saving" ? "Saving…" : "Autosaved"}
+            Autosaved
           </span>
         </span>
       </div>
 
       <div className="stepper mb-7">
-        {STEPS.map((label, i) => (
-          <button
-            key={label}
-            type="button"
-            disabled={i > maxStep}
-            onClick={() => jump(i)}
-            className={`stepper-item ${i === step ? "is-active" : ""} ${
-              i !== step && i < maxStep ? "is-done" : ""
-            }`}
-            aria-current={i === step ? "step" : undefined}
-          >
-            <span className="stepper-num">
-              {i < step ? <Check size={14} aria-hidden="true" /> : i + 1}
-            </span>
-            <span>{label}</span>
-            <span className="stepper-bar" aria-hidden="true" />
-          </button>
-        ))}
-      </div>
-
-      <div key={step} className={`step-anim${dir === -1 ? " step-anim-back" : ""}`}>
-        <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-2 mb-5">
-          <div>
-            <h2 className="text-[clamp(1.35rem,2.6vw,1.75rem)] font-semibold tracking-[-0.02em] text-ink">
-              {stepTitle}
-            </h2>
-            <p className="text-[14.5px] text-muted mt-1.5">{stepSub}</p>
-          </div>
-          <button
-            type="button"
-            className="btn-link flex items-center gap-1.5"
-            onClick={autofill}
-          >
-            <Sparkles size={14} aria-hidden="true" /> Autofill test data
-          </button>
-        </div>
-
-        <div>{renderStep()}</div>
-      </div>
-
-      {notice ? (
-        <div className="notice notice-warn mt-6" role="status">
-          <CircleAlert aria-hidden="true" />
-          <span>
-            {notice}{" "}
-            {noticeId ? (
-              <Link
-                href={`/talent/${noticeId}`}
-                className="underline font-semibold text-body"
-              >
-                Open your page
-              </Link>
-            ) : null}
-          </span>
-        </div>
-      ) : null}
-
-      {claimPending ? (
-        <div className="notice mt-6" role="status">
-          <Info aria-hidden="true" />
-          <span className="grid gap-3 w-full">
-            <span>
-              {claimPending.mode === "created"
-                ? "Your page is ready - set a password to finish publishing."
-                : "That email already has a page - enter its password to take control."}{" "}
-              {`This password signs you back in at ${draft.email.trim()}.`}
-            </span>
-            <span className="flex flex-wrap items-center gap-2">
-              <input
-                id="j-claim-password"
-                className="input"
-                style={{ maxWidth: 220 }}
-                type="password"
-                value={claimPassword}
-                onChange={(e) => {
-                  setClaimPassword(e.target.value);
-                  setClaimErr(null);
-                }}
-                placeholder="Password (8+ chars)"
-                autoComplete="new-password"
-                maxLength={200}
-                aria-label="Password"
-                aria-invalid={claimErr ? true : undefined}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    void submitClaim();
-                  }
-                }}
-              />
-              <input
-                id="j-claim-confirm"
-                className="input"
-                style={{ maxWidth: 220 }}
-                type="password"
-                value={claimConfirm}
-                onChange={(e) => {
-                  setClaimConfirm(e.target.value);
-                  setClaimErr(null);
-                }}
-                placeholder="Confirm password"
-                autoComplete="new-password"
-                maxLength={200}
-                aria-label="Confirm password"
-                aria-invalid={claimErr ? true : undefined}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    void submitClaim();
-                  }
-                }}
-              />
-              <button
-                type="button"
-                className="btn btn-primary btn-sm press"
-                disabled={claimBusy}
-                onClick={() => void submitClaim()}
-              >
-                {claimBusy ? (
-                  <Loader2 size={14} className="animate-spin" aria-hidden="true" />
-                ) : null}
-                Set password
-              </button>
-            </span>
-            {claimErr ? (
-              <span className="field-error" role="alert">
-                {claimErr}
+        {STEPS.map((label, index) => {
+          const number = index + 1;
+          const classes = ["stepper-item"];
+          if (number === step) classes.push("is-active");
+          else if (number < step) classes.push("is-done");
+          const disabled = pending || number > maxStep;
+          return (
+            <button
+              key={label}
+              type="button"
+              className={classes.join(" ")}
+              disabled={disabled}
+              aria-current={number === step ? "step" : undefined}
+              onClick={() => {
+                if (number !== step) goTo(number);
+              }}
+            >
+              <span className="stepper-num" aria-hidden="true">
+                {number}
               </span>
-            ) : null}
-          </span>
-        </div>
-      ) : null}
-
-      <div className="flex items-center justify-between gap-3 mt-7 pt-5 border-t border-line">
-        <div className="flex flex-wrap items-center gap-4">
-          {step > 0 ? (
-            <button type="button" className="btn btn-secondary press" onClick={back}>
-              <ArrowLeft size={16} aria-hidden="true" /> Back
+              <span>{label}</span>
+              <span className="stepper-bar" aria-hidden="true" />
             </button>
-          ) : (
-            <Link href="/" className="btn btn-secondary press">
-              <ArrowLeft size={16} aria-hidden="true" /> Back
-            </Link>
-          )}
-          <span className="field-hint hidden sm:inline">Drafts autosave on this device.</span>
-        </div>
-        <button
-          type="button"
-          className="btn btn-primary press"
-          onClick={goNext}
-          disabled={busy}
-        >
-          {step < STEPS.length - 1 ? (
-            <>
-              Continue <ArrowRight size={16} aria-hidden="true" />
-            </>
-          ) : busy ? (
-            <>
-              <Loader2 size={16} className="animate-spin" aria-hidden="true" /> Publishing…
-            </>
-          ) : (
-            <>
-              Publish my page <ArrowRight size={16} aria-hidden="true" />
-            </>
-          )}
-        </button>
+          );
+        })}
       </div>
+
+      <form noValidate onSubmit={onSubmit} onKeyDown={onKeyDown}>
+        <datalist id="join-locations">
+          {Array.from(
+            new Set(
+              CITIES.concat(
+                draft.location && !CITIES.includes(draft.location)
+                  ? [draft.location]
+                  : [],
+              ),
+            ),
+          ).map((city) => (
+            <option key={city} value={city} />
+          ))}
+        </datalist>
+        <datalist id="join-roles">
+          {ROLE_OPTIONS.map((role) => (
+            <option key={role} value={role} />
+          ))}
+        </datalist>
+
+        <div className={back ? "step-anim step-anim-back" : "step-anim"}>
+          <div className="mb-5 flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
+            <div>
+              <h2 className="text-[clamp(1.35rem,2.6vw,1.75rem)] font-semibold tracking-[-0.02em] text-ink">
+                {title.title}
+              </h2>
+              <p className="mt-1.5 text-[14.5px] text-muted">{title.sub}</p>
+            </div>
+            <button
+              type="button"
+              className="btn-link flex items-center gap-1.5"
+              onClick={autofill}
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z" />
+                <path d="M20 2v4" />
+                <path d="M22 4h-4" />
+                <circle cx="4" cy="20" r="2" />
+              </svg>
+              Autofill test data
+            </button>
+          </div>
+
+          {renderStep()}
+
+          {formError && (
+            <p className="field-error mt-5" role="alert">
+              {formError}
+            </p>
+          )}
+
+          <div className="mt-7 flex items-center justify-between gap-3 border-t border-line pt-5">
+            <div className="flex flex-wrap items-center gap-4">
+              {step > 1 ? (
+                <button
+                  type="button"
+                  className="btn btn-secondary press"
+                  disabled={pending}
+                  onClick={() => goTo(step - 1)}
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="m12 19-7-7 7-7" />
+                    <path d="M19 12H5" />
+                  </svg>
+                  Back
+                </button>
+              ) : (
+                <Link href="/" className="btn btn-secondary press">
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="m12 19-7-7 7-7" />
+                    <path d="M19 12H5" />
+                  </svg>
+                  Back
+                </Link>
+              )}
+              <span className="field-hint hidden sm:inline">
+                Drafts autosave on this device.
+              </span>
+            </div>
+            <button
+              type="submit"
+              className="btn btn-primary press"
+              disabled={pending}
+            >
+              {pending
+                ? "Publishing…"
+                : step >= STEPS.length
+                  ? "Publish my page"
+                  : "Continue"}
+              {!pending && step < STEPS.length && (
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M5 12h14" />
+                  <path d="m12 5 7 7-7 7" />
+                </svg>
+              )}
+            </button>
+          </div>
+        </div>
+      </form>
     </div>
   );
-}
 
-function ChevronRightPlaceholder() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="m9 18 6-6-6-6" />
-    </svg>
-  );
+  function removeButton(
+    index: number,
+    field: "experiences" | "projects" | "education" | "oss",
+    errorsKey: string,
+  ) {
+    return (
+      <button
+        type="button"
+        className="chip-x"
+        disabled={pending}
+        onClick={() => removeEntry(index, field, errorsKey)}
+      >
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M18 6 6 18" />
+          <path d="m6 6 12 12" />
+        </svg>
+        Remove
+      </button>
+    );
+  }
+
+  function renderStep(): React.ReactNode {
+    switch (step) {
+      case 1:
+        return (
+          <>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <TextField
+                id="j-name"
+                label="Full name"
+                required
+                value={draft.name}
+                onChange={(event) => editField("name", event.target.value)}
+                error={errors.name}
+                placeholder="Aarav Sharma"
+                autoComplete="name"
+              />
+              <TextField
+                id="j-email"
+                label="Email"
+                required
+                hint="Becomes your contact email automatically."
+                value={draft.email}
+                onChange={(event) => {
+                  editField("email", event.target.value);
+                  setLookupState("idle");
+                  setLookupMsg("");
+                }}
+                error={errors.email}
+                type="email"
+                placeholder="you@example.com"
+                autoComplete="email"
+              />
+              <TextField
+                id="j-phone"
+                label="Phone"
+                hint="Optional."
+                value={draft.phone}
+                onChange={(event) => editField("phone", event.target.value)}
+                error={errors.phone}
+                type="tel"
+                placeholder="+91 98765 43210"
+                autoComplete="tel"
+              />
+              <div className="field content-start">
+                <label className="field-label" htmlFor="j-loc">
+                  City
+                  <span className="req" aria-hidden="true">
+                    *
+                  </span>
+                </label>
+                <div className="relative">
+                  <input
+                    id="j-loc"
+                    className="input"
+                    style={{ paddingRight: "38px" }}
+                    role="combobox"
+                    aria-expanded="false"
+                    aria-controls="join-locations"
+                    aria-autocomplete="list"
+                    list="join-locations"
+                    placeholder="Bengaluru"
+                    autoComplete="address-level2"
+                    value={draft.location}
+                    onChange={(event) =>
+                      editField("location", event.target.value)
+                    }
+                    aria-invalid={errors.location ? true : undefined}
+                  />
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                    className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-muted"
+                  >
+                    <path d="m6 9 6 6 6-6" />
+                  </svg>
+                </div>
+                {errors.location && (
+                  <p className="field-error" role="alert">
+                    {errors.location}
+                  </p>
+                )}
+              </div>
+              <div className="sm:col-span-2">
+                <TextField
+                  id="j-photo"
+                  label="Photo URL"
+                  hint="Direct image link - shown as your avatar."
+                  value={draft.photo_url}
+                  onChange={(event) =>
+                    editField("photo_url", event.target.value)
+                  }
+                  error={errors.photo_url}
+                  type="url"
+                  placeholder="https://…"
+                />
+              </div>
+            </div>
+            <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-line pt-5">
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm press"
+                disabled={pending || lookupState === "checking"}
+                onClick={() => void runLookup()}
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="m21 21-4.34-4.34" />
+                  <circle cx="11" cy="11" r="8" />
+                </svg>
+                {lookupState === "checking" ? "Checking..." : "Check for an existing page"}
+              </button>
+              <span className="field-hint">
+                Publishing twice for the same email returns the existing page to
+                you.
+              </span>
+            </div>
+            {lookupMsg && (
+              <p
+                className={
+                  lookupState === "found" || lookupState === "failed"
+                    ? "field-error mt-3"
+                    : "field-hint mt-3"
+                }
+                role="status"
+              >
+                {lookupMsg}
+              </p>
+            )}
+          </>
+        );
+      case 2:
+        return (
+          <>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <TextField
+                id="join-role"
+                label="Target role"
+                required
+                value={draft.role}
+                onChange={(event) => editField("role", event.target.value)}
+                error={errors.role}
+                list="join-roles"
+                placeholder="Backend Engineer"
+              />
+              <TextField
+                id="join-current-role"
+                label="Current role"
+                value={draft.current_role}
+                onChange={(event) =>
+                  editField("current_role", event.target.value)
+                }
+                error={errors.current_role}
+                placeholder="SDE II at Flipkart"
+              />
+              <TextField
+                id="join-headline"
+                label="Headline"
+                hint="One line that stays pinned under your name."
+                value={draft.headline}
+                onChange={(event) => editField("headline", event.target.value)}
+                error={errors.headline}
+                placeholder="Backend engineer who likes boring, reliable systems."
+              />
+              <TextField
+                id="join-domain"
+                label="Domain"
+                required
+                value={draft.domain}
+                onChange={(event) => editField("domain", event.target.value)}
+                error={errors.domain}
+                placeholder="Software Development"
+              />
+              <TextField
+                id="join-exp"
+                label="Years of experience"
+                value={draft.exp}
+                onChange={(event) => editField("exp", event.target.value)}
+                error={errors.exp}
+                type="number"
+                min={0}
+                max={50}
+                placeholder="3"
+              />
+            </div>
+            <div className="mt-4">
+              <ChipPicker
+                id="join-skills"
+                label="Core skills"
+                required
+                hint="Up to 10. Type and press Enter, or pick a suggestion."
+                values={draft.skills}
+                onChange={(next) =>
+                  edit((d) => {
+                    d.skills = next;
+                  }, "skills")
+                }
+                error={errors.skills}
+                placeholder="Type a skill and press Enter"
+              />
+            </div>
+          </>
+        );
+      case 3:
+        return (
+          <>
+            {draft.experiences.length === 0 && (
+              <p className="empty-note">
+                No experience added yet - add your first role.
+              </p>
+            )}
+            {draft.experiences.map((experience, index) => {
+              const entry = entryFor(errors, "experiences", index);
+              return (
+                <div
+                  className="mb-4 rounded-2xl border border-line p-4 sm:p-5"
+                  key={`experience-${index}`}
+                >
+                  <div className="mb-4 flex items-center justify-between gap-3">
+                    <span className="font-mono text-[11.5px] uppercase tracking-[0.14em] text-muted">
+                      Experience {index + 1}
+                    </span>
+                    {removeButton(index, "experiences", "experiences")}
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <TextField
+                      id={`join-exp-title-${index}`}
+                      label="Role"
+                      required
+                      value={experience.title}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setEntries(
+                          "experiences",
+                          (list) =>
+                            list.map((item, i) =>
+                              i === index ? { ...item, title: value } : item,
+                            ),
+                          `experiences.${index}.title`,
+                        );
+                      }}
+                      error={entry.title}
+                      placeholder="Backend Engineer"
+                    />
+                    <TextField
+                      id={`join-exp-company-${index}`}
+                      label="Company"
+                      required
+                      value={experience.company}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setEntries(
+                          "experiences",
+                          (list) =>
+                            list.map((item, i) =>
+                              i === index ? { ...item, company: value } : item,
+                            ),
+                          `experiences.${index}.company`,
+                        );
+                      }}
+                      error={entry.company}
+                      placeholder="Flipkart"
+                    />
+                    <TextField
+                      id={`join-exp-start-${index}`}
+                      label="Start"
+                      value={experience.start_date}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setEntries(
+                          "experiences",
+                          (list) =>
+                            list.map((item, i) =>
+                              i === index
+                                ? { ...item, start_date: value }
+                                : item,
+                            ),
+                          `experiences.${index}.start_date`,
+                        );
+                      }}
+                      error={entry.start_date}
+                      placeholder="Jul 2022"
+                    />
+                    <TextField
+                      id={`join-exp-end-${index}`}
+                      label="End"
+                      hint="Leave blank if this is your current role."
+                      value={experience.end_date}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setEntries(
+                          "experiences",
+                          (list) =>
+                            list.map((item, i) =>
+                              i === index ? { ...item, end_date: value } : item,
+                            ),
+                          `experiences.${index}.end_date`,
+                        );
+                      }}
+                      error={entry.end_date}
+                      placeholder="Present"
+                    />
+                    <div className="sm:col-span-2">
+                      <TextAreaField
+                        id={`join-exp-desc-${index}`}
+                        label="What you owned"
+                        rows={3}
+                        value={experience.description}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          setEntries(
+                            "experiences",
+                            (list) =>
+                              list.map((item, i) =>
+                                i === index
+                                  ? { ...item, description: value }
+                                  : item,
+                              ),
+                            `experiences.${index}.description`,
+                          );
+                        }}
+                        error={entry.description}
+                        placeholder="Owned checkout APIs at 2k rps; cut p99 from 800ms to 180ms."
+                      />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+            <div className="mt-4">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={pending}
+                onClick={() => addEntry("experiences", emptyExperience, "experiences")}
+              >
+                <span aria-hidden="true">+</span> Add experience
+              </button>
+            </div>
+          </>
+        );
+      case 4:
+        return (
+          <>
+            {draft.projects.length === 0 && (
+              <p className="empty-note">
+                No projects added yet - add something you have shipped.
+              </p>
+            )}
+            {draft.projects.map((project, index) => {
+              const entry = entryFor(errors, "projects", index);
+              return (
+                <div
+                  className="mb-4 rounded-2xl border border-line p-4 sm:p-5"
+                  key={`project-${index}`}
+                >
+                  <div className="mb-4 flex items-center justify-between gap-3">
+                    <span className="font-mono text-[11.5px] uppercase tracking-[0.14em] text-muted">
+                      Project {index + 1}
+                    </span>
+                    {removeButton(index, "projects", "projects")}
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <TextField
+                      id={`join-proj-title-${index}`}
+                      label="Project name"
+                      required
+                      value={project.title}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setEntries(
+                          "projects",
+                          (list) =>
+                            list.map((item, i) =>
+                              i === index ? { ...item, title: value } : item,
+                            ),
+                          `projects.${index}.title`,
+                        );
+                      }}
+                      error={entry.title}
+                      placeholder="Ledgerly"
+                    />
+                    <SelectField
+                      id={`join-proj-type-${index}`}
+                      label="Type"
+                      value={project.project_type}
+                      options={withValue(PROJECT_TYPE_OPTIONS, project.project_type)}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setEntries(
+                          "projects",
+                          (list) =>
+                            list.map((item, i) =>
+                              i === index
+                                ? { ...item, project_type: value }
+                                : item,
+                            ),
+                          `projects.${index}.project_type`,
+                        );
+                      }}
+                      error={entry.project_type}
+                    />
+                    <TextField
+                      id={`join-proj-live-${index}`}
+                      label="Live URL"
+                      value={project.live}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setEntries(
+                          "projects",
+                          (list) =>
+                            list.map((item, i) =>
+                              i === index ? { ...item, live: value } : item,
+                            ),
+                          `projects.${index}.links.live`,
+                        );
+                      }}
+                      error={entry["links.live"]}
+                      type="url"
+                      placeholder="https://…"
+                    />
+                    <TextField
+                      id={`join-proj-repo-${index}`}
+                      label="Repo URL"
+                      value={project.repo}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setEntries(
+                          "projects",
+                          (list) =>
+                            list.map((item, i) =>
+                              i === index ? { ...item, repo: value } : item,
+                            ),
+                          `projects.${index}.links.repo`,
+                        );
+                      }}
+                      error={entry["links.repo"]}
+                      type="url"
+                      placeholder="https://github.com/…"
+                    />
+                    <div className="sm:col-span-2">
+                      <TextField
+                        id={`join-proj-desc-${index}`}
+                        label="One-liner"
+                        required
+                        value={project.description}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          setEntries(
+                            "projects",
+                            (list) =>
+                              list.map((item, i) =>
+                                i === index
+                                  ? { ...item, description: value }
+                                  : item,
+                              ),
+                            `projects.${index}.description`,
+                          );
+                        }}
+                        error={entry.description}
+                        placeholder="Invoicing for Indian freelancers, UPI + GST built in."
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <TextAreaField
+                        id={`join-proj-problem-${index}`}
+                        label="What it solves and your role"
+                        rows={3}
+                        value={project.problem}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          setEntries(
+                            "projects",
+                            (list) =>
+                              list.map((item, i) =>
+                                i === index ? { ...item, problem: value } : item,
+                              ),
+                            `projects.${index}.problem`,
+                          );
+                        }}
+                        error={entry.problem}
+                        placeholder="Designed the data model, built the API and the React dashboard solo."
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <ChipPicker
+                        id={`join-project-stack-${index}`}
+                        label="Stack"
+                        values={project.tech}
+                        onChange={(next) =>
+                          setEntries(
+                            "projects",
+                            (list) =>
+                              list.map((item, i) =>
+                                i === index ? { ...item, tech: next } : item,
+                              ),
+                            `projects.${index}.tech`,
+                          )
+                        }
+                        error={entry.tech}
+                        placeholder="Type a stack and press Enter"
+                      />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+            <div className="mt-4">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={pending}
+                onClick={() => addEntry("projects", emptyProject, "projects")}
+              >
+                <span aria-hidden="true">+</span> Add project
+              </button>
+            </div>
+          </>
+        );
+      case 5:
+        return (
+          <>
+            {draft.education.length === 0 && (
+              <p className="empty-note">
+                No education added yet - add a degree or bootcamp.
+              </p>
+            )}
+            {draft.education.map((education, index) => {
+              const entry = entryFor(errors, "education", index);
+              return (
+                <div
+                  className="mb-4 rounded-2xl border border-line p-4 sm:p-5"
+                  key={`education-${index}`}
+                >
+                  <div className="mb-4 flex items-center justify-between gap-3">
+                    <span className="font-mono text-[11.5px] uppercase tracking-[0.14em] text-muted">
+                      Education {index + 1}
+                    </span>
+                    {removeButton(index, "education", "education")}
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <SelectField
+                      id={`join-edu-degree-${index}`}
+                      label="Degree"
+                      value={education.degree}
+                      options={withValue(DEGREE_OPTIONS, education.degree)}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setEntries(
+                          "education",
+                          (list) =>
+                            list.map((item, i) =>
+                              i === index ? { ...item, degree: value } : item,
+                            ),
+                          `education.${index}.degree`,
+                        );
+                      }}
+                      error={entry.degree}
+                    />
+                    <TextField
+                      id={`join-edu-field-${index}`}
+                      label="Field of study"
+                      value={education.field}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setEntries(
+                          "education",
+                          (list) =>
+                            list.map((item, i) =>
+                              i === index ? { ...item, field: value } : item,
+                            ),
+                          `education.${index}.field`,
+                        );
+                      }}
+                      error={entry.field}
+                      placeholder="Computer Science"
+                    />
+                    <TextField
+                      id={`join-edu-inst-${index}`}
+                      label="Institution"
+                      required
+                      value={education.institution}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setEntries(
+                          "education",
+                          (list) =>
+                            list.map((item, i) =>
+                              i === index
+                                ? { ...item, institution: value }
+                                : item,
+                            ),
+                          `education.${index}.institution`,
+                        );
+                      }}
+                      error={entry.institution}
+                      placeholder="NIT Trichy"
+                    />
+                    <TextField
+                      id={`join-edu-years-${index}`}
+                      label="Years"
+                      value={education.years}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setEntries(
+                          "education",
+                          (list) =>
+                            list.map((item, i) =>
+                              i === index ? { ...item, years: value } : item,
+                            ),
+                          `education.${index}.years`,
+                        );
+                      }}
+                      error={entry.years}
+                      placeholder="2019 - 2023"
+                    />
+                    <div className="sm:col-span-2">
+                      <TextField
+                        id={`join-edu-grade-${index}`}
+                        label="Grade / honors"
+                        value={education.achievements}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          setEntries(
+                            "education",
+                            (list) =>
+                              list.map((item, i) =>
+                                i === index
+                                  ? { ...item, achievements: value }
+                                  : item,
+                              ),
+                            `education.${index}.achievements`,
+                          );
+                        }}
+                        error={entry.achievements}
+                        placeholder="8.7 CGPA"
+                      />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+            <div className="mt-4">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={pending}
+                onClick={() => addEntry("education", emptyEducation, "education")}
+              >
+                <span aria-hidden="true">+</span> Add education
+              </button>
+            </div>
+
+            <div className="mt-7">
+              <h3 className="text-[17px] font-semibold text-ink">Open source</h3>
+              <p className="mt-1 text-[14.5px] text-muted">
+                Maintainer work, recurring contributions, PRs you are proud of.
+              </p>
+            </div>
+            {draft.oss.map((oss, index) => {
+              const entry = entryFor(errors, "oss", index);
+              return (
+                <div
+                  className="mt-4 rounded-2xl border border-line p-4 sm:p-5"
+                  key={`oss-${index}`}
+                >
+                  <div className="mb-4 flex items-center justify-between gap-3">
+                    <span className="font-mono text-[11.5px] uppercase tracking-[0.14em] text-muted">
+                      Contribution {index + 1}
+                    </span>
+                    {removeButton(index, "oss", "oss")}
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <TextField
+                      id={`join-oss-name-${index}`}
+                      label="Project"
+                      required
+                      value={oss.repo_name}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setEntries(
+                          "oss",
+                          (list) =>
+                            list.map((item, i) =>
+                              i === index
+                                ? { ...item, repo_name: value }
+                                : item,
+                            ),
+                          `oss.${index}.repo_name`,
+                        );
+                      }}
+                      error={entry.repo_name}
+                      placeholder="React"
+                    />
+                    <TextField
+                      id={`join-oss-repo-${index}`}
+                      label="Repo URL"
+                      value={oss.repo_url}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setEntries(
+                          "oss",
+                          (list) =>
+                            list.map((item, i) =>
+                              i === index ? { ...item, repo_url: value } : item,
+                            ),
+                          `oss.${index}.repo_url`,
+                        );
+                      }}
+                      error={entry.repo_url}
+                      type="url"
+                      placeholder="https://github.com/…"
+                    />
+                    <SelectField
+                      id={`join-oss-role-${index}`}
+                      label="Role"
+                      value={oss.role}
+                      options={withValue(OSS_ROLE_OPTIONS, oss.role)}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setEntries(
+                          "oss",
+                          (list) =>
+                            list.map((item, i) =>
+                              i === index ? { ...item, role: value } : item,
+                            ),
+                          `oss.${index}.role`,
+                        );
+                      }}
+                      error={entry.role}
+                    />
+                    <TextField
+                      id={`join-oss-pr-${index}`}
+                      label="Pull request URL"
+                      value={oss.pr_links}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setEntries(
+                          "oss",
+                          (list) =>
+                            list.map((item, i) =>
+                              i === index ? { ...item, pr_links: value } : item,
+                            ),
+                          `oss.${index}.pr_links`,
+                        );
+                      }}
+                      error={entry.pr_links}
+                      type="url"
+                      placeholder="https://github.com/…/pull/…"
+                    />
+                    <div className="sm:col-span-2">
+                      <TextAreaField
+                        id={`join-oss-desc-${index}`}
+                        label="Summary"
+                        rows={3}
+                        value={oss.description}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          setEntries(
+                            "oss",
+                            (list) =>
+                              list.map((item, i) =>
+                                i === index
+                                  ? { ...item, description: value }
+                                  : item,
+                              ),
+                            `oss.${index}.description`,
+                          );
+                        }}
+                        error={entry.description}
+                        placeholder="Triaged beginner issues, reviewed 40+ PRs, shipped the v3 migration codemod."
+                      />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+            <div className="mt-4">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={pending}
+                onClick={() => addEntry("oss", emptyOss, "oss")}
+              >
+                <span aria-hidden="true">+</span> Add contribution
+              </button>
+            </div>
+
+            <div className="mt-7">
+              <h3 className="text-[17px] font-semibold text-ink">Links</h3>
+              <p className="mt-1 text-[14.5px] text-muted">
+                GitHub and LinkedIn matter most to hiring teams.
+              </p>
+            </div>
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <TextField
+                id="join-github"
+                label="GitHub"
+                value={draft.github}
+                onChange={(event) => editField("github", event.target.value)}
+                error={errors.github}
+                type="url"
+                placeholder="https://github.com/you"
+              />
+              <TextField
+                id="join-linkedin"
+                label="LinkedIn"
+                value={draft.linkedin}
+                onChange={(event) => editField("linkedin", event.target.value)}
+                error={errors.linkedin}
+                type="url"
+                placeholder="https://linkedin.com/in/you"
+              />
+              <TextField
+                id="join-portfolio"
+                label="Portfolio"
+                value={draft.portfolio}
+                onChange={(event) => editField("portfolio", event.target.value)}
+                error={errors.portfolio}
+                type="url"
+                placeholder="https://…"
+              />
+              <TextField
+                id="join-resume"
+                label="Resume URL"
+                value={draft.resume_url}
+                onChange={(event) =>
+                  editField("resume_url", event.target.value)
+                }
+                error={errors.resume_url}
+                type="url"
+                placeholder="https://…"
+              />
+            </div>
+          </>
+        );
+      case 6:
+        return (
+          <>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <TextField
+                id="join-salary"
+                label="Salary expectation"
+                hint="Plain number - your period is chosen below."
+                value={draft.min_salary}
+                onChange={(event) =>
+                  editField("min_salary", event.target.value)
+                }
+                error={errors.min_salary}
+                inputMode="numeric"
+                placeholder="280000"
+              />
+              <SelectField
+                id="join-currency"
+                label="Currency"
+                value={draft.currency}
+                options={CURRENCY_OPTIONS}
+                onChange={(event) => editField("currency", event.target.value)}
+                error={errors.currency}
+              />
+              <SelectField
+                id="join-frequency"
+                label="Salary frequency"
+                value={draft.frequency}
+                options={FREQUENCY_OPTIONS}
+                onChange={(event) => editField("frequency", event.target.value)}
+                error={errors.frequency}
+              />
+              <SelectField
+                id="join-notice"
+                label="Notice period"
+                value={draft.notice_period}
+                options={withValue(NOTICE_OPTIONS, draft.notice_period)}
+                onChange={(event) =>
+                  editField("notice_period", event.target.value)
+                }
+                error={errors.notice_period}
+              />
+              <SelectField
+                id="join-availability"
+                label="Availability"
+                value={draft.availability}
+                options={withValue(AVAILABILITY_OPTIONS, draft.availability)}
+                onChange={(event) =>
+                  editField("availability", event.target.value)
+                }
+                error={errors.availability}
+              />
+              <SelectField
+                id="join-work-mode"
+                label="Preferred work mode"
+                value={draft.remote_pref}
+                options={WORK_MODE_OPTIONS}
+                onChange={(event) => editField("remote_pref", event.target.value)}
+                error={errors.remote_pref}
+              />
+            </div>
+            <div className="mt-4">
+              <SelectField
+                id="join-visibility"
+                label="Visibility"
+                hint="Unlisted keeps you out of search but your page still works from a direct link."
+                value={draft.visibility}
+                options={VISIBILITY_OPTIONS}
+                onChange={(event) =>
+                  editField("visibility", event.target.value)
+                }
+                error={errors.visibility}
+              />
+            </div>
+            <div className="mt-4">
+              <CheckField
+                id="join-consent"
+                label="I consent to Tammy processing this profile for matching"
+                checked={draft.consent}
+                onChange={(checked) =>
+                  edit((next) => {
+                    next.consent = checked;
+                  }, "consent")
+                }
+                error={errors.consent}
+              />
+              <p className="field-hint">
+                You can turn this off later from your dashboard.
+              </p>
+            </div>
+          </>
+        );
+      case 7:
+        return (
+          <>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <TextField
+                id="join-account-email"
+                label="Account email"
+                hint="Sign-in and replies both land here."
+                value={draft.email}
+                onChange={(event) => editField("email", event.target.value)}
+                error={errors.email}
+                type="email"
+                placeholder="you@example.com"
+                autoComplete="email"
+              />
+              <div />
+              <TextField
+                id="join-password"
+                label="Password"
+                value={password}
+                onChange={(event) => {
+                  setPassword(event.target.value);
+                  touch("password");
+                }}
+                error={errors.password}
+                type="password"
+                placeholder="At least 8 characters"
+                autoComplete="new-password"
+              />
+              <TextField
+                id="join-confirm"
+                label="Confirm password"
+                value={confirm}
+                onChange={(event) => {
+                  setConfirm(event.target.value);
+                  touch("confirm");
+                }}
+                error={errors.confirm}
+                type="password"
+                placeholder="Repeat your password"
+                autoComplete="new-password"
+              />
+            </div>
+            <div className="notice mt-4">
+              <strong>Before you publish</strong>
+              <ul className="mt-1.5 list-disc pl-5">
+                <li>
+                  Your page starts unlisted - only people with the link can see
+                  it.
+                </li>
+                <li>
+                  Hiring teams see your contact details when they open your
+                  page.
+                </li>
+                <li>You can edit or unpublish any time from your dashboard.</li>
+              </ul>
+            </div>
+          </>
+        );
+      default:
+        return null;
+    }
+  }
 }

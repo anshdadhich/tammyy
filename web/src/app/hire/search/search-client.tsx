@@ -1,333 +1,500 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, Search } from "lucide-react";
-import { jobSchema, toFieldErrors } from "@/lib/validators";
+import { useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import { DOMAINS, EMPLOYMENT_TYPES } from "@/lib/skills";
+import { jobSchema } from "@/lib/validators";
+import ResultsView from "./results-view";
+import SkillPicker from "./skill-picker";
 import {
-  EXP_RANGES,
-  MODE_LABEL,
+  apiError,
   deriveTitle,
-  flattenErrors,
-  stageDefs,
-  type Row,
-  type Run,
-  type Session,
-  type SlState,
-} from "./search-ui";
-import ComposeView, { SearchHero } from "./compose-view";
-import SessionLine from "./session-line";
-import SearchingView from "./searching-view";
-import { ResultsView } from "./results-view";
+  postJson,
+  type SearchRow,
+  type SearchRun,
+  type SessionInfo,
+  type View,
+} from "./common";
 
-export default function SearchClient({
-  initialSession,
+const DEMO_QUERY =
+  "Backend engineer on Node/Postgres - designs the service boundaries, owns the schema, and keeps p95 honest under load. Payments experience is a plus; rigor is the requirement.";
+
+const TRY_CHIPS = [
+  "Designer · fintech · remote",
+  "Backend · Node/Postgres",
+  "Design systems lead",
+];
+
+const SENIORITIES = ["Intern", "Junior", "Mid", "Senior", "Lead", "Staff"];
+const WORK_MODES = ["Remote", "Hybrid", "On-site"];
+const EXPERIENCE = ["Any", "1–3 years", "3–5 years", "5–8 years", "8+ years"];
+const CURRENCIES = ["INR", "USD", "EUR", "GBP", "SGD", "AED", "AUD", "CAD"];
+
+function expRange(label: string): { min: number; max: number } {
+  if (label === "1–3 years") return { min: 1, max: 3 };
+  if (label === "3–5 years") return { min: 3, max: 5 };
+  if (label === "5–8 years") return { min: 5, max: 8 };
+  if (label === "8+ years") return { min: 8, max: 50 };
+  return { min: 0, max: 50 };
+}
+
+function Ico({
+  size = 14,
+  className,
+  children,
 }: {
-  initialSession: Session | null;
+  size?: number;
+  className?: string;
+  children: ReactNode;
 }) {
-  const [session, setSession] = useState<Session | null>(initialSession);
-  const [prompt, setPrompt] = useState("");
-  const [deep, setDeep] = useState(false);
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      {children}
+    </svg>
+  );
+}
+
+type Props = {
+  session: SessionInfo;
+};
+
+export default function SearchClient({ session }: Props) {
+  const [view, setView] = useState<View>("compose");
+  const [runs, setRuns] = useState<SearchRun[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const [status, setStatus] = useState("");
+
+  const [query, setQuery] = useState(DEMO_QUERY);
+  const [deep, setDeep] = useState(true);
   const [refineOpen, setRefineOpen] = useState(true);
-  const [seniority, setSeniority] = useState("mid");
-  const [mode, setMode] = useState("remote");
-  const [expLabel, setExpLabel] = useState("Any");
-  const [mustHave, setMustHave] = useState<string[]>([]);
-  const [domain, setDomain] = useState("Software Development");
-  const [employment, setEmployment] = useState("full-time");
+  const [seniority, setSeniority] = useState("Mid");
+  const [workMode, setWorkMode] = useState("Remote");
+  const [exp, setExp] = useState("Any");
+  const [skills, setSkills] = useState<string[]>(["Node.js", "PostgreSQL"]);
   const [currency, setCurrency] = useState("INR");
   const [amount, setAmount] = useState("");
+  const [domain, setDomain] = useState("Software Development");
+  const [employment, setEmployment] = useState("full-time");
   const [relocation, setRelocation] = useState(false);
-  const [errs, setErrs] = useState<Record<string, string>>({});
-  const [notice, setNotice] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [runs, setRuns] = useState<Run[]>([]);
-  const [activeRunId, setActiveRunId] = useState<number | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [sl, setSl] = useState<SlState>({});
-  const [view, setView] = useState<"compose" | "searching" | "results">(
-    "compose",
-  );
-  const [stage, setStage] = useState(0);
-  const stageTimer = useRef<ReturnType<typeof setInterval> | null>(null);
-  const nextRunId = useRef(1);
 
-  const stages = stageDefs({
-    deep,
-    skills: mustHave.length,
-    mode: MODE_LABEL[mode] ?? mode,
-    exp: expLabel,
-  });
+  const searching = view === "searching";
+  const lastRun = runs[0];
+  const expSummary = exp === "Any" ? "any experience" : exp.toLowerCase();
+  const summary = `${seniority} · ${workMode} · ${expSummary} · ${skills.length} must-have${
+    skills.length === 1 ? "" : "s"
+  }`;
 
-  const clearErr = (key: string) =>
-    setErrs((prev) => {
-      if (!(key in prev)) return prev;
-      const next = { ...prev };
-      delete next[key];
-      return next;
-    });
-
-  const resetFeedback = () => {
-    setErrs({});
-    setNotice(null);
-  };
-
-  const showRun = (r: Run) => {
-    setActiveRunId(r.id);
-    setSelectedId(r.results[0]?.id ?? null);
-    setView("results");
-  };
-
-  const openRun = (id: number) => {
-    const r = runs.find((x) => x.id === id);
-    if (r) showRun(r);
-  };
-
-  const pickCandidate = (runId: number, rowId: string) => {
-    setActiveRunId(runId);
-    setSelectedId(rowId);
-  };
-
-  useEffect(
-    () => () => {
-      if (stageTimer.current) clearInterval(stageTimer.current);
-    },
-    [],
-  );
-
-  const run = async () => {
-    if (busy) return;
-    const text = prompt.trim();
-    const range = EXP_RANGES.find((r) => r.label === expLabel) ?? EXP_RANGES[0];
-    const amountNum = amount.trim() ? Number(amount.replace(/[,\s]/g, "")) : 0;
-    const job = {
-      title: deriveTitle(text),
+  async function runSearch(): Promise<void> {
+    if (searching) return;
+    const range = expRange(exp);
+    const amountDigits = amount.replace(/\D/g, "");
+    const job: Record<string, unknown> = {
+      title: deriveTitle(query),
       domain,
-      seniority,
-      must_have: mustHave,
-      nice_to_have: [] as string[],
+      seniority: seniority.toLowerCase(),
+      must_have: skills,
+      nice_to_have: [],
       min_exp: range.min,
       max_exp: range.max,
-      salary_min: amountNum,
       currency,
-      location: "",
-      remote_policy: mode,
+      remote_policy:
+        workMode === "Remote" ? "remote" : workMode === "Hybrid" ? "hybrid" : "onsite",
       relocation_allowed: relocation,
       employment_type: employment,
-      description: text,
-      responsibilities: "",
-      screening_requirements: "",
+      description: query.trim(),
     };
-
+    if (amountDigits) job.salary_max = Number(amountDigits);
     const parsed = jobSchema.safeParse(job);
     if (!parsed.success) {
-      setErrs(toFieldErrors(parsed.error));
-      setNotice("Fix the highlighted fields.");
+      setError(apiError({ errors: parsed.error.flatten() }));
       return;
     }
-    setErrs({});
-    setNotice(null);
-    setBusy(true);
-    setStage(0);
+    setError("");
     setView("searching");
-    if (stageTimer.current) clearInterval(stageTimer.current);
-    stageTimer.current = setInterval(() => {
-      setStage((s) => Math.min(s + 1, stages.length - 1));
-    }, 450);
+    setStatus(`Searching for ${parsed.data.title}…`);
     try {
-      const res = await fetch("/api/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ job, limit: deep ? 10 : 30, deep }),
-      });
-      const body = (await res.json().catch(() => null)) as {
-        results?: Row[];
-        queryText?: string;
-        cached?: boolean;
-        deep?: boolean;
+      const json = (await postJson("/api/search", { job: parsed.data, deep })) as {
+        results?: SearchRow[];
+        searchId?: string | null;
         deepError?: string;
-        error?: string;
-        errors?: unknown;
-      } | null;
-
-      if (res.status === 401) {
-        setView("compose");
-        setSession(null);
-        return;
-      }
-      if (res.status === 429) {
-        setView("compose");
-        setNotice("Rate limit reached - take a short pause and try again.");
-        return;
-      }
-      if (res.status === 400 && body?.errors) {
-        setView("compose");
-        setErrs(flattenErrors(body.errors));
-        setNotice("Fix the highlighted fields.");
-        return;
-      }
-      if (!res.ok) {
-        setView("compose");
-        setNotice(body?.error || "Search failed - try again.");
-        return;
-      }
-      const rows: Row[] = Array.isArray(body?.results) ? body.results : [];
-      const entry: Run = {
-        id: nextRunId.current++,
-        title: deriveTitle(text),
-        prompt: text,
-        results: rows,
-        meta: {
-          queryText: typeof body?.queryText === "string" ? body.queryText : "",
-          cached: body?.cached === true,
-          deep: body?.deep === true,
-        },
-        deepError: typeof body?.deepError === "string" ? body.deepError : null,
-        ranAt: new Date().toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-        }),
       };
-      setRuns((prev) => [entry, ...prev]);
-      setActiveRunId(entry.id);
-      setSelectedId(rows[0]?.id ?? null);
-      setView("results");
-    } catch {
+      const results = Array.isArray(json.results) ? json.results : [];
+      const run: SearchRun = {
+        id: json.searchId ?? `run-${Date.now()}`,
+        title: parsed.data.title,
+        time: new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+        deep,
+        results,
+      };
+      if (json.deepError) run.note = json.deepError;
+      setRuns((prev) => [run, ...prev]);
+      setActiveId(run.id);
+      setSelectedId(results[0]?.id ?? null);
+      setView(results.length ? "detail" : "results");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Something went wrong");
       setView("compose");
-      setNotice("Network error - try again.");
     } finally {
-      if (stageTimer.current) {
-        clearInterval(stageTimer.current);
-        stageTimer.current = null;
-      }
-      setBusy(false);
+      setStatus("");
     }
-  };
+  }
 
-  const shortlist = async (id: string) => {
-    if (sl[id]) return;
-    setSl((s) => ({ ...s, [id]: "saving" }));
-    try {
-      const res = await fetch("/api/shortlists", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ candidate_id: id }),
-      });
-      if (res.status === 401) {
-        setSession(null);
-        setSl((s) => {
-          const next = { ...s };
-          delete next[id];
-          return next;
-        });
-        return;
-      }
-      if (res.ok) {
-        setSl((s) => ({ ...s, [id]: "saved" }));
-        return;
-      }
-      if (res.status === 429)
-        setNotice("Shortlist rate limit - pause a moment and retry.");
-      setSl((s) => ({ ...s, [id]: "error" }));
-    } catch {
-      setSl((s) => ({ ...s, [id]: "error" }));
-    }
-  };
+  function onComposerKeyDown(e: KeyboardEvent<HTMLTextAreaElement>): void {
+    if (e.key !== "Enter" || e.shiftKey) return;
+    e.preventDefault();
+    void runSearch();
+  }
 
-  if (!session) {
+  function selectRun(id: string): void {
+    const run = runs.find((candidate) => candidate.id === id);
+    if (!run) return;
+    setActiveId(run.id);
+    setSelectedId(run.results[0]?.id ?? null);
+    setView(run.results.length ? "detail" : "results");
+  }
+
+  function selectCandidate(id: string): void {
+    setSelectedId(id);
+    setView("detail");
+  }
+
+  function showLastResults(): void {
+    if (!lastRun) return;
+    setActiveId(lastRun.id);
+    setSelectedId(lastRun.results[0]?.id ?? null);
+    setView(lastRun.results.length ? "detail" : "results");
+  }
+
+  function newSearch(): void {
+    setView("compose");
+    setStatus("");
+    setError("");
+  }
+
+  function backToResults(): void {
+    setSelectedId(null);
+    setView("results");
+  }
+
+  if (view === "results" || view === "detail") {
     return (
-      <div className="max-w-xl mx-auto px-6 pt-16 lg:pt-24 pb-24">
-        <div className="rounded-2xl bg-surface shadow-soft-md p-7 sm:p-9 text-center">
-          <div className="w-11 h-11 rounded-full bg-brand-soft text-brand-text grid place-items-center mx-auto">
-            <Search size={20} aria-hidden="true" />
-          </div>
-          <h2 className="mt-5 text-[22px] font-semibold tracking-[-0.01em] text-ink">
-            Employer session required.
-          </h2>
-          <p className="mt-3 text-[15px] leading-[1.6] text-body">
-            Results carry candidate contact channels, so searches sit behind a
-            per-device employer session - one email opens it.
-          </p>
-          <Link href="/hire/login" className="btn btn-primary press mt-6">
-            Open a session <ArrowRight size={16} aria-hidden="true" />
-          </Link>
-        </div>
-      </div>
+      <ResultsView
+        runs={runs}
+        activeId={activeId}
+        selectedId={selectedId}
+        showDetail={view === "detail"}
+        onSelectRun={selectRun}
+        onSelectCandidate={selectCandidate}
+        onNewSearch={newSearch}
+        onBack={backToResults}
+      />
     );
   }
 
   return (
-    <div
-      className={
-        view === "results"
-          ? "w-full px-4 sm:px-6 lg:px-10 pb-24 pt-4"
-          : view === "searching"
-            ? "max-w-[860px] mx-auto px-6 pb-24 pt-10 min-h-[68vh] flex flex-col justify-center"
-            : "max-w-[860px] mx-auto px-6 pb-24"
-      }
-    >
-      {view === "compose" ? (
-        <>
-          <SearchHero />
-          <SessionLine session={session} />
-        </>
-      ) : null}
+    <div className="max-w-[860px] mx-auto px-6 pb-24">
+      <section className="pt-16 lg:pt-24 pb-8">
+        <div className="text-center">
+          <h1
+            className="rise text-[clamp(2rem,4.6vw,3.25rem)] font-semibold tracking-[-0.03em] leading-[1.06] text-ink"
+            style={{ "--d": "60ms" } as CSSProperties}
+          >
+            Who do you need?
+          </h1>
+          <p
+            className="rise mt-4 text-[17px] leading-[1.6] text-muted max-w-[560px] mx-auto"
+            style={{ "--d": "160ms" } as CSSProperties}
+          >
+            Describe your target role in plain English. Requirements get parsed automatically and
+            matched against verified candidates.
+          </p>
+        </div>
+      </section>
 
-      {view === "compose" ? (
-        <ComposeView
-          prompt={prompt}
-          setPrompt={setPrompt}
-          deep={deep}
-          setDeep={setDeep}
-          refineOpen={refineOpen}
-          setRefineOpen={setRefineOpen}
-          seniority={seniority}
-          setSeniority={setSeniority}
-          mode={mode}
-          setMode={setMode}
-          expLabel={expLabel}
-          setExpLabel={setExpLabel}
-          mustHave={mustHave}
-          setMustHave={setMustHave}
-          domain={domain}
-          setDomain={setDomain}
-          employment={employment}
-          setEmployment={setEmployment}
-          currency={currency}
-          setCurrency={setCurrency}
-          amount={amount}
-          setAmount={setAmount}
-          relocation={relocation}
-          setRelocation={setRelocation}
-          errs={errs}
-          clearErr={clearErr}
-          resetFeedback={resetFeedback}
-          notice={notice}
-          busy={busy}
-          onSubmit={() => void run()}
-          lastRun={runs[0] ?? null}
-          onShowLast={() => showRun(runs[0])}
+      <div className="flex flex-wrap items-center justify-center gap-2.5 mb-5 text-[13px] text-muted">
+        <span
+          className="pulse-dot inline-block w-2 h-2 rounded-full"
+          style={{
+            background: session.employerStatus === "verified" ? "var(--success)" : "var(--warn)",
+          }}
+          aria-hidden="true"
         />
-      ) : view === "searching" ? (
-        <SearchingView
-          title={deriveTitle(prompt.trim())}
-          brief={prompt.trim()}
-          deep={deep}
-          stage={stage}
-          stages={stages}
+        <span className="font-mono text-[11.5px] uppercase tracking-[0.14em]">
+          {session.name ? `${session.name} · ${session.email}` : session.email}
+        </span>
+        <span aria-hidden="true">·</span>
+        <Link
+          href="/hire/login"
+          className="text-muted underline hover:text-brand-text transition-colors"
+        >
+          Switch session
+        </Link>
+      </div>
+
+      <div className="sq-try">
+        <span className="sq-try-label">Try</span>
+        {TRY_CHIPS.map((chip) => (
+          <button key={chip} type="button" className="chip-toggle" onClick={() => setQuery(chip)}>
+            {chip}
+          </button>
+        ))}
+      </div>
+
+      <div className="composer">
+        <textarea
+          className="composer-input"
+          maxLength={10000}
+          placeholder="Describe the role you're hiring for…"
+          aria-label="Describe the role you're hiring for"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={onComposerKeyDown}
         />
-      ) : (
-        <ResultsView
-          runs={runs}
-          activeRunId={activeRunId}
-          selectedId={selectedId}
-          sl={sl}
-          onRun={openRun}
-          onPick={pickCandidate}
-          onShortlist={(id) => void shortlist(id)}
-          onNew={() => setView("compose")}
-        />
-      )}
+        <div className="composer-bar">
+          <div className="flex flex-wrap items-center gap-2.5 min-w-0">
+            <button
+              type="button"
+              className={`chip-toggle${deep ? " is-on" : ""}`}
+              aria-pressed={deep}
+              onClick={() => setDeep((on) => !on)}
+            >
+              <Ico>
+                <path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z" />
+                <path d="M20 2v4" />
+                <path d="M22 4h-4" />
+                <circle cx="4" cy="20" r="2" />
+              </Ico>
+              Deep read
+            </button>
+            <span className="sq-hint">
+              <span className="sq-kbd">⏎</span> search
+              <span aria-hidden="true"> · </span>
+              <span className="sq-kbd">⇧⏎</span> newline
+            </span>
+          </div>
+          <button
+            type="button"
+            className="send-btn"
+            aria-label="Run search"
+            disabled={searching}
+            onClick={() => void runSearch()}
+          >
+            <Ico size={18}>
+              <path d="M5 12h14" />
+              <path d="m12 5 7 7-7 7" />
+            </Ico>
+          </button>
+        </div>
+      </div>
+
+      <p
+        className={status ? "field-hint mt-3" : "field-hint"}
+        aria-live="polite"
+      >
+        {status}
+      </p>
+      <p className={error ? "field-error mt-2" : "field-error"} role="alert">
+        {error}
+      </p>
+
+      <div className="rounded-2xl bg-surface shadow-soft-md mt-5 overflow-hidden">
+        <button
+          type="button"
+          className="btn-plain flex w-full items-center justify-between gap-3 sq-refine-head"
+          aria-expanded={refineOpen}
+          onClick={() => setRefineOpen((open) => !open)}
+        >
+          <span className="flex items-center gap-3 min-w-0">
+            <span className="sq-refine-ic" aria-hidden="true">
+              <Ico size={16}>
+                <path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" />
+                <rect width="20" height="14" x="2" y="6" rx="2" />
+              </Ico>
+            </span>
+            <span className="min-w-0 text-left">
+              <span className="block text-[15px] font-semibold text-ink tracking-[-0.01em]">
+                Refine constraints
+              </span>
+              <span className="sq-refine-sum">{summary}</span>
+            </span>
+          </span>
+          <span className="flex items-center gap-1.5 text-[13px] text-muted flex-none">
+            {refineOpen ? "Collapse" : "Expand"}
+            <Ico
+              size={15}
+              className={`transition-transform${refineOpen ? " rotate-90" : ""}`}
+            >
+              <path d="m9 18 6-6-6-6" />
+            </Ico>
+          </span>
+        </button>
+
+        {refineOpen ? (
+          <div className="px-5 pb-6 pt-5 border-t border-line grid gap-6 sq-refine-body">
+            <div className="grid gap-5 sm:grid-cols-2">
+              <div className="field">
+                <span className="field-label">Seniority</span>
+                <div className="seg" role="group" aria-label="Seniority">
+                  {SENIORITIES.map((option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      className={`seg-btn${seniority === option ? " is-on" : ""}`}
+                      aria-pressed={seniority === option}
+                      onClick={() => setSeniority(option)}
+                    >
+                      {option}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="field">
+                <span className="field-label">Work mode</span>
+                <div className="seg" role="group" aria-label="Work mode">
+                  {WORK_MODES.map((option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      className={`seg-btn${workMode === option ? " is-on" : ""}`}
+                      aria-pressed={workMode === option}
+                      onClick={() => setWorkMode(option)}
+                    >
+                      {option}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="field">
+              <span className="field-label">Experience range</span>
+              <div className="flex flex-wrap gap-2 mt-1">
+                {EXPERIENCE.map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    className={`chip-toggle${exp === option ? " is-on" : ""}`}
+                    aria-pressed={exp === option}
+                    onClick={() => setExp(option)}
+                  >
+                    {option}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <SkillPicker skills={skills} onChange={setSkills} />
+
+            <div className="field">
+              <span className="field-label">Target compensation (annual)</span>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="field mb-0">
+                  <label className="field-label" htmlFor="refine-currency">
+                    Currency
+                  </label>
+                  <select
+                    id="refine-currency"
+                    className="select"
+                    value={currency}
+                    onChange={(e) => setCurrency(e.target.value)}
+                  >
+                    {CURRENCIES.map((code) => (
+                      <option key={code} value={code}>
+                        {code}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="field mb-0">
+                  <label className="field-label" htmlFor="refine-amount">
+                    Amount
+                  </label>
+                  <input
+                    id="refine-amount"
+                    className="input"
+                    inputMode="numeric"
+                    placeholder="e.g. 50000"
+                    value={amount}
+                    onChange={(e) => setAmount(e.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="field mb-0">
+                <label className="field-label" htmlFor="refine-domain">
+                  Domain
+                </label>
+                <select
+                  id="refine-domain"
+                  className="select"
+                  value={domain}
+                  onChange={(e) => setDomain(e.target.value)}
+                >
+                  {DOMAINS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="field mb-0">
+                <label className="field-label" htmlFor="refine-employment">
+                  Employment
+                </label>
+                <select
+                  id="refine-employment"
+                  className="select"
+                  value={employment}
+                  onChange={(e) => setEmployment(e.target.value)}
+                >
+                  {EMPLOYMENT_TYPES.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={relocation}
+                onChange={(e) => setRelocation(e.target.checked)}
+              />
+              <span>Must be open to relocation</span>
+            </label>
+          </div>
+        ) : null}
+      </div>
+
+      {lastRun ? (
+        <div className="mt-6">
+          <button type="button" className="btn-link" onClick={showLastResults}>
+            View last results ({lastRun.results.length}){" "}
+            <Ico>
+              <path d="M5 12h14" />
+              <path d="m12 5 7 7-7 7" />
+            </Ico>
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

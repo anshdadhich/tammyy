@@ -1,285 +1,182 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { Menu, Moon, Sun, X } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
+import type { ViewerSession } from "@/lib/hr-session";
 import { toggleTheme } from "@/lib/theme";
-import {
-  SESSION_EVENT,
-  fetchViewer,
-  signOut as endSession,
-  recallViewer,
-  viewerInitials,
-  type ViewerSession,
-} from "@/lib/session-client";
 
-const LANDING_NAV = [
-  { label: "Candidates", href: "/#candidates" },
-  { label: "Employers", href: "/hire" },
-  { label: "Match engine", href: "/#engine" },
-  { label: "FAQ", href: "/#faq" },
-] as const;
+type Variant = "landing" | "join" | "hire";
 
-const JOIN_NAV = [
-  { label: "Home", href: "/" },
-  { label: "Build my page", href: "/join" },
-] as const;
+const NAV_ITEMS: Record<Variant, { label: string; href: string }[]> = {
+  landing: [
+    { label: "Candidates", href: "/#candidates" },
+    { label: "Employers", href: "/hire" },
+    { label: "Match engine", href: "/#engine" },
+    { label: "FAQ", href: "/#faq" },
+  ],
+  join: [
+    { label: "Home", href: "/" },
+    { label: "Build my page", href: "/join" },
+  ],
+  hire: [
+    { label: "Home", href: "/" },
+    { label: "Hiring", href: "/hire" },
+  ],
+};
 
-const HIRE_NAV = [
-  { label: "Home", href: "/" },
-  { label: "Hiring", href: "/hire" },
-] as const;
+const SUN_PATHS = (
+  <>
+    <circle cx="12" cy="12" r="4" />
+    <path d="M12 2v2" />
+    <path d="M12 20v2" />
+    <path d="m4.93 4.93 1.41 1.41" />
+    <path d="m17.66 17.66 1.41 1.41" />
+    <path d="M2 12h2" />
+    <path d="M20 12h2" />
+    <path d="m6.34 17.66-1.41 1.41" />
+    <path d="m19.07 4.93-1.41 1.41" />
+  </>
+);
 
-const SIGNUP_OPTIONS = [
-  { label: "Get hired", href: "/join" },
-  { label: "Hiring someone", href: "/hire/login" },
-] as const;
-
-type NavItem = { label: string; href: string };
-
-function sameViewer(a: ViewerSession | null | undefined, b: ViewerSession | null | undefined): boolean {
-  if (a === b) return true;
-  if (!a || !b) return false;
-  if (a.kind !== b.kind || a.email !== b.email) return false;
-  return (a.isAdmin ?? false) === (b.isAdmin ?? false);
+function initialsOf(v: ViewerSession) {
+  const src = (v.name ?? v.email.split("@")[0]).trim();
+  const parts = src.split(/[\s._-]+/).filter(Boolean);
+  const out = parts.slice(0, 2).map((w) => w[0]).join("").toUpperCase();
+  return out || "?";
 }
 
-export default function AppNav({ active: activeProp, initialViewer = null, viewerConfirmed = true }: { active?: string; initialViewer?: ViewerSession | null; viewerConfirmed?: boolean } = {}) {
-  const pathname = usePathname();
-  const isJoin = pathname.startsWith("/join");
-  const isHire = pathname.startsWith("/hire");
-  const isAuthPage = pathname.startsWith("/hire/login") || pathname.startsWith("/join");
-  const items: readonly NavItem[] = isJoin ? JOIN_NAV : isHire ? HIRE_NAV : LANDING_NAV;
-  const sectionActive = isJoin ? "/join" : isHire ? "/hire" : null;
-  const showAuth = !isJoin;
-
-  const [landingActive, setLandingActive] = useState<string>(
-    activeProp ?? LANDING_NAV[0]?.href ?? "/",
-  );
-  const active = sectionActive ?? landingActive;
+export default function AppNav({
+  variant,
+  active,
+  viewer,
+}: {
+  variant: Variant;
+  active?: string;
+  viewer: ViewerSession | null;
+}) {
+  const router = useRouter();
+  const [menu, setMenu] = useState<"" | "auth" | "account">("");
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [authOpen, setAuthOpen] = useState(false);
-  const [profileOpen, setProfileOpen] = useState(false);
-  const [viewer, setViewer] = useState<ViewerSession | null>(initialViewer);
-  const [syncedInitialViewer, setSyncedInitialViewer] = useState(initialViewer);
-  const [provisional, setProvisional] = useState(!initialViewer && !viewerConfirmed);
-  const [scrolled, setScrolled] = useState(false);
-  const [hideNav, setHideNav] = useState(false);
-  const reduceMotion = useReducedMotion();
-  const actionsRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLElement>(null);
 
-  const lastY = useRef(0);
   useEffect(() => {
-    const onScroll = () => {
-      const y = window.scrollY;
-      setScrolled(y > 8);
-      if (y > 140 && y > lastY.current + 2) setHideNav(true);
-      else if (y < lastY.current - 2) setHideNav(false);
-      lastY.current = y;
-    };
+    const onScroll = () => headerRef.current?.classList.toggle("is-scrolled", window.scrollY > 4);
     onScroll();
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
   useEffect(() => {
-    const sync = () => {
-      const hash = window.location.hash;
-      if (hash && LANDING_NAV.some((n) => n.href === `/${hash}`)) {
-        setLandingActive(`/${hash}`);
-        return;
-      }
-      if (!hash) setLandingActive(activeProp ?? LANDING_NAV[0]?.href ?? "/");
-    };
-    sync();
-    window.addEventListener("hashchange", sync);
-    return () => window.removeEventListener("hashchange", sync);
-  }, [activeProp]);
-
-  // Apply new server-rendered identity during render, before React paints the
-  // old actions for a route transition. Compares by value so equal identities
-  // never tear down the actions subtree; an unconfirmed null never replaces a
-  // known viewer (server hiccup must not paint logged-out UI).
-  if (!sameViewer(initialViewer, syncedInitialViewer)) {
-    setSyncedInitialViewer(initialViewer);
-    if (initialViewer !== null || viewerConfirmed) setViewer(initialViewer);
-  }
-
-  useLayoutEffect(() => {
-    const remembered = recallViewer();
-    if (remembered) {
-      // Hydrate the remembered session synchronously before first paint so a
-      // returning user never sees a logged-out flash. External-store read on
-      // mount by design — async deferral would reintroduce the flash.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setViewer((cur) => cur ?? remembered);
-      setProvisional(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    let alive = true;
-    const load = () => {
-      fetchViewer()
-        .then((v) => {
-          if (!alive) return;
-          setViewer(v);
-          setProvisional(false);
-        })
-        .catch(() => {
-          // Network/5xx: keep the optimistic state instead of painting
-          // logged-out UI over a signed-in user (or vice versa).
-        });
-    };
-    load();
-    const onEvent = () => load();
-    window.addEventListener(SESSION_EVENT, onEvent);
-    return () => {
-      alive = false;
-      window.removeEventListener(SESSION_EVENT, onEvent);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!authOpen && !profileOpen) return;
-    const onPointer = (e: PointerEvent) => {
-      if (actionsRef.current && !actionsRef.current.contains(e.target as Node)) {
-        setAuthOpen(false);
-        setProfileOpen(false);
-      }
+    if (!menu) return;
+    const onDown = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenu("");
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setAuthOpen(false);
-        setProfileOpen(false);
-      }
+      if (e.key === "Escape") setMenu("");
     };
-    document.addEventListener("pointerdown", onPointer);
+    document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
     return () => {
-      document.removeEventListener("pointerdown", onPointer);
+      document.removeEventListener("mousedown", onDown);
       document.removeEventListener("keydown", onKey);
     };
-  }, [authOpen, profileOpen]);
+  }, [menu]);
 
-  const signOut = async () => {
-    await endSession();
-    setViewer(null);
-    setProvisional(false);
-    setProfileOpen(false);
+  const items = NAV_ITEMS[variant];
+  const showLogin = !viewer && variant !== "join";
+  const showSearch = viewer !== null && viewer.kind === "hr" && !viewer.isAdmin;
+
+  const closeAll = () => {
+    setMenu("");
     setMobileOpen(false);
   };
 
+  const logout = async () => {
+    closeAll();
+    await fetch("/api/auth/logout", { method: "POST" });
+    router.refresh();
+  };
+
+  const linkItems = items.map((it) => {
+    const isActive = active === it.href;
+    return (
+      <Link
+        key={it.href}
+        href={it.href}
+        className={`site-nav-link press${isActive ? " is-active" : ""}`}
+        style={{ position: "relative" }}
+        aria-current={isActive ? "page" : undefined}
+        onClick={closeAll}
+      >
+        {isActive && <span className="site-nav-pill" />}
+        <span style={{ position: "relative" }}>{it.label}</span>
+      </Link>
+    );
+  });
+
+  const mobileItems = items.map((it) => {
+    const isActive = active === it.href;
+    return (
+      <Link
+        key={it.href}
+        href={it.href}
+        className={`site-mobile-link${isActive ? " is-active" : ""}`}
+        onClick={closeAll}
+      >
+        {it.label}
+      </Link>
+    );
+  });
+
   return (
-    <motion.header
-      className={`site-navbar-wrap${scrolled && !isAuthPage ? " is-scrolled" : ""}`}
-      initial={false}
-      animate={{ y: hideNav ? "-110%" : 0 }}
-      transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
-    >
+    <header ref={headerRef} className="site-navbar-wrap">
       <div className="site-navbar !px-[max(24px,calc((100%_-_1160px)/2))]">
-        <Link
-          href="/"
-          className="site-brand site-brand-text"
-          onClick={() => {
-            setLandingActive(LANDING_NAV[0]?.href ?? "/");
-            setMobileOpen(false);
-          }}
-        >
+        <Link href="/" className="site-brand site-brand-text">
           Tammy
         </Link>
-
         <nav aria-label="Main navigation" className="site-navigation hidden lg:flex">
-          <div className="site-nav-links">
-            {items.map((item) => {
-              const isActive = active === item.href;
-              return (
-                <Link
-                  key={item.href + item.label}
-                  href={item.href}
-                  onClick={() => {
-                    setLandingActive(item.href);
-                    setMobileOpen(false);
-                  }}
-                  aria-current={isActive ? "page" : undefined}
-                  className={`site-nav-link press${isActive ? " is-active" : ""}`}
-                  style={{ position: "relative" }}
-                >
-                  {isActive ? (
-                    <motion.span
-                      layoutId="site-nav-pill"
-                      className="site-nav-pill"
-                      initial={false}
-                      transition={{ type: "spring", stiffness: 500, damping: 35 }}
-                    />
-                  ) : null}
-                  <span style={{ position: "relative" }}>{item.label}</span>
-                </Link>
-              );
-            })}
-          </div>
+          <div className="site-nav-links">{linkItems}</div>
         </nav>
-
-        <div className="site-nav-actions" ref={actionsRef}>
-          {viewer ? (
-            <div className="nav-menu-wrap">
+        <div className="site-nav-actions">
+          {viewer && (
+            <div className="nav-menu-wrap" ref={menuRef}>
               <button
                 type="button"
                 className="nav-avatar press"
                 aria-haspopup="menu"
-                aria-expanded={profileOpen}
+                aria-expanded={menu === "account"}
                 aria-label="Account menu"
-                onClick={() => {
-                  setProfileOpen((v) => !v);
-                  setAuthOpen(false);
-                }}
+                onClick={() => setMenu(menu === "account" ? "" : "account")}
               >
-                {viewerInitials(viewer)}
+                {initialsOf(viewer)}
               </button>
-              {profileOpen ? (
+              {menu === "account" && (
                 <div className="nav-menu" role="menu">
-                  <Link
-                    href="/settings"
-                    role="menuitem"
-                    className="nav-menu-item"
-                    onClick={() => setProfileOpen(false)}
-                  >
+                  <div className="nav-menu-item" style={{ cursor: "default" }}>
+                    {viewer.email}
+                  </div>
+                  <Link href="/settings" className="nav-menu-item" role="menuitem" onClick={closeAll}>
                     Settings
                   </Link>
-                  {viewer.isAdmin ? (
-                    <Link
-                      href="/admin"
-                      role="menuitem"
-                      className="nav-menu-item"
-                      onClick={() => setProfileOpen(false)}
-                    >
-                      Admin
+                  {viewer.isAdmin && (
+                    <Link href="/admin" className="nav-menu-item" role="menuitem" onClick={closeAll}>
+                      Admin console
                     </Link>
-                  ) : null}
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="nav-menu-item"
-                    onClick={() => void signOut()}
-                  >
+                  )}
+                  <button type="button" className="nav-menu-item" role="menuitem" onClick={logout}>
                     Log out
                   </button>
                 </div>
-              ) : null}
+              )}
             </div>
-          ) : null}
-
-          {viewer?.kind === "hr" ? (
-            <Link
-              href="/hire/search"
-              className="site-login press h-10"
-              onClick={() => setMobileOpen(false)}
-            >
+          )}
+          {showSearch && (
+            <Link href="/hire/search" className="site-login press h-10" onClick={closeAll}>
               Search
             </Link>
-          ) : null}
+          )}
           <button
             type="button"
             className="theme-toggle press"
@@ -287,177 +184,137 @@ export default function AppNav({ active: activeProp, initialViewer = null, viewe
             title="Toggle light / dark theme"
             onClick={toggleTheme}
           >
-            <Sun className="theme-icon-sun" aria-hidden="true" />
-            <Moon className="theme-icon-moon" aria-hidden="true" />
+            <svg
+              className="theme-icon-sun"
+              aria-hidden="true"
+              xmlns="http://www.w3.org/2000/svg"
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              {SUN_PATHS}
+            </svg>
+            <svg
+              className="theme-icon-moon"
+              aria-hidden="true"
+              xmlns="http://www.w3.org/2000/svg"
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+            </svg>
           </button>
-          {showAuth && !viewer ? (
-            provisional ? (
-              <span className="nav-avatar nav-avatar--ghost" aria-hidden="true" />
-            ) : (
-              <div className="nav-menu-wrap">
+          {showLogin && (
+            <div className="nav-menu-wrap" ref={menuRef}>
               <button
                 type="button"
                 className="site-nav-cta press h-10"
                 aria-haspopup="menu"
-                aria-expanded={authOpen}
-                onClick={() => {
-                  setAuthOpen((v) => !v);
-                  setProfileOpen(false);
-                }}
+                aria-expanded={menu === "auth"}
+                onClick={() => setMenu(menu === "auth" ? "" : "auth")}
               >
                 Login / Sign up
               </button>
-              {authOpen ? (
+              {menu === "auth" && (
                 <div className="nav-menu" role="menu">
-                  {SIGNUP_OPTIONS.map((option) => (
-                    <Link
-                      key={option.href}
-                      href={option.href}
-                      role="menuitem"
-                      className="nav-menu-item"
-                      onClick={() => {
-                        setAuthOpen(false);
-                        setMobileOpen(false);
-                      }}
-                    >
-                      {option.label}
-                    </Link>
-                  ))}
+                  <Link href="/join" className="nav-menu-item" role="menuitem" onClick={closeAll}>
+                    Get hired
+                  </Link>
+                  <Link href="/hire/login" className="nav-menu-item" role="menuitem" onClick={closeAll}>
+                    Hiring someone
+                  </Link>
                 </div>
-              ) : null}
+              )}
             </div>
-            )
-          ) : null}
+          )}
           <button
             type="button"
             className="site-nav-burger lg:hidden press"
             aria-expanded={mobileOpen}
             aria-label={mobileOpen ? "Close menu" : "Open menu"}
-            onClick={() => setMobileOpen((v) => !v)}
+            onClick={() => {
+              setMenu("");
+              setMobileOpen(!mobileOpen);
+            }}
           >
-            {mobileOpen ? <X /> : <Menu />}
+            {mobileOpen ? (
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="24"
+                height="24"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M18 6 6 18" />
+                <path d="m6 6 12 12" />
+              </svg>
+            ) : (
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="24"
+                height="24"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <line x1="4" x2="20" y1="12" y2="12" />
+                <line x1="4" x2="20" y1="6" y2="6" />
+                <line x1="4" x2="20" y1="18" y2="18" />
+              </svg>
+            )}
           </button>
         </div>
-      </div>
-
-      <AnimatePresence initial={false}>
-        {mobileOpen ? (
-          <motion.nav
-            key="mobile-nav"
-            aria-label="Mobile navigation"
-            className="site-mobile-nav lg:hidden"
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={
-              reduceMotion
-                ? { duration: 0 }
-                : { duration: 0.3, ease: [0.16, 1, 0.3, 1] }
-            }
-            style={{ overflow: "hidden" }}
-          >
-            <div className="site-mobile-links">
-              {items.map((item, i) => (
-                <motion.div
-                  key={item.href + item.label}
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{
-                    duration: 0.25,
-                    delay: reduceMotion ? 0 : 0.05 + i * 0.05,
-                  }}
-                >
-                  <Link
-                    href={item.href}
-                    onClick={() => {
-                      setLandingActive(item.href);
-                      setMobileOpen(false);
-                    }}
-                    className={`site-mobile-link${active === item.href ? " is-active" : ""}`}
-                  >
-                    {item.label}
+        {mobileOpen && (
+          <div className="site-mobile-nav">
+            <div className="site-mobile-links">{mobileItems}</div>
+            <div className="site-mobile-actions">
+              {showLogin && (
+                <>
+                  <Link href="/join" className="site-nav-cta press" onClick={closeAll}>
+                    Get hired
                   </Link>
-                </motion.div>
-              ))}
-              {showAuth ? (
-                <motion.div
-                  initial={{ opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{
-                    duration: 0.25,
-                    delay: reduceMotion ? 0 : 0.28,
-                  }}
-                  className="site-mobile-actions"
-                >
-                  {!viewer ? (
-                    provisional ? (
-                      <span className="nav-avatar nav-avatar--ghost" aria-hidden="true" />
-                    ) : (
-                      <button
-                        type="button"
-                        className="site-nav-cta"
-                        style={{ justifyContent: "center" }}
-                        aria-expanded={authOpen}
-                        onClick={() => setAuthOpen((v) => !v)}
-                      >
-                        Login / Sign up
-                      </button>
-                    )
-                  ) : null}
-                  {!viewer && authOpen ? (
-                    <div className="nav-menu nav-menu--inline" role="menu">
-                      {SIGNUP_OPTIONS.map((option) => (
-                        <Link
-                          key={option.href}
-                          href={option.href}
-                          role="menuitem"
-                          className="nav-menu-item"
-                          onClick={() => {
-                            setAuthOpen(false);
-                            setMobileOpen(false);
-                          }}
-                        >
-                          {option.label}
-                        </Link>
-                      ))}
-                    </div>
-                  ) : null}
-                  {viewer?.kind === "hr" ? (
-                    <Link
-                      href="/hire/search"
-                      className="site-login"
-                      style={{ justifyContent: "center" }}
-                      onClick={() => setMobileOpen(false)}
-                    >
-                      Search
-                    </Link>
-                  ) : null}
-                  {viewer ? (
-                    <>
-                      <Link
-                        href="/settings"
-                        className="site-login"
-                        style={{ justifyContent: "center" }}
-                        onClick={() => setMobileOpen(false)}
-                      >
-                        Settings
-                      </Link>
-                      <button
-                        type="button"
-                        className="site-login"
-                        style={{ justifyContent: "center" }}
-                        onClick={() => void signOut()}
-                      >
-                        Log out
-                      </button>
-                    </>
-                  ) : null}
-                </motion.div>
-              ) : null}
+                  <Link href="/hire/login" className="site-login press" onClick={closeAll}>
+                    Hiring someone
+                  </Link>
+                </>
+              )}
+              {showSearch && (
+                <Link href="/hire/search" className="site-login press" onClick={closeAll}>
+                  Search
+                </Link>
+              )}
+              {viewer && (
+                <>
+                  <Link href="/settings" className="site-login press" onClick={closeAll}>
+                    Settings
+                  </Link>
+                  <button type="button" className="site-login press" onClick={logout}>
+                    Log out
+                  </button>
+                </>
+              )}
             </div>
-          </motion.nav>
-        ) : null}
-      </AnimatePresence>
-    </motion.header>
+          </div>
+        )}
+      </div>
+    </header>
   );
 }

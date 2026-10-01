@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 import PageShell from "@/components/PageShell";
+import { readHrSession, readNavViewer } from "@/lib/hr-session";
 import SettingsClient from "./settings-client";
-import { getViewerAuth } from "@/lib/api-auth";
 
 export const metadata: Metadata = {
   title: "Settings",
@@ -9,13 +10,16 @@ export const metadata: Metadata = {
 };
 
 export default async function SettingsPage() {
-  const initialViewer = await getViewerAuth();
+  const viewer = await readNavViewer();
+  if (!viewer) redirect("/");
+  const hr = await readHrSession();
+
   return (
-    <PageShell>
+    <PageShell variant="landing" active="/#candidates" viewer={viewer}>
       <h1 className="sr-only">Settings</h1>
       <section className="pt-12 lg:pt-16 pb-24">
         <div className="max-w-[1160px] mx-auto px-6">
-          <SettingsClient initialViewer={initialViewer} />
+          <SettingsClient viewer={viewer} hr={hr} />
         </div>
       </section>
     </PageShell>

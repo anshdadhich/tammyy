@@ -1,212 +1,147 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useState } from "react";
+import type { AdminEmployer } from "@/lib/admin-employers";
 
-type Employer = {
-  id: string;
-  company_name: string | null;
-  company_email: string | null;
-  website: string | null;
-  linkedin_url: string | null;
-  company_size: string | null;
-  industry: string | null;
-  verification_status: string | null;
-  created_at: string | null;
-  account_email: string | null;
-};
+type Status = "pending" | "verified" | "rejected" | "all";
+type Action = "verify" | "reject" | "set_plan";
 
-function registrableHost(v: string | null): string | null {
-  if (!v) return null;
+const TABS: { label: string; value: Status }[] = [
+  { label: "Pending", value: "pending" },
+  { label: "Verified", value: "verified" },
+  { label: "Rejected", value: "rejected" },
+  { label: "All", value: "all" },
+];
+
+const PLANS = [
+  { value: "free", label: "free · 25/mo" },
+  { value: "basic", label: "basic · 500/mo" },
+  { value: "pro", label: "pro · 2000/mo" },
+];
+
+function domainMatches(email: string | null, website: string | null): boolean {
+  if (!email || !website) return false;
+  const at = email.indexOf("@");
+  if (at < 0) return false;
+  const emailDomain = email.slice(at + 1).toLowerCase();
+  let host = "";
   try {
-    const u = new URL(v.startsWith("http") ? v : `https://${v}`);
-    const host = u.hostname.toLowerCase().replace(/^www\./, "");
-    if (!host.includes(".")) return null;
-    return host;
+    host = new URL(website.includes("://") ? website : `https://${website}`).hostname;
   } catch {
-    return null;
+    host = "";
   }
+  host = host.toLowerCase().replace(/^www\./, "");
+  if (!host) return false;
+  return emailDomain === host || emailDomain.endsWith(`.${host}`);
 }
 
-function emailDomain(v: string | null): string | null {
-  if (!v) return null;
-  const at = v.toLowerCase().indexOf("@");
-  if (at < 0) return null;
-  const host = v.slice(at + 1).replace(/^www\./, "");
-  if (!host.includes(".")) return null;
-  return host;
-}
-
-function domainMatch(e: Employer): boolean {
-  const site = registrableHost(e.website);
-  if (!site) return false;
-  const mail = emailDomain(e.account_email ?? e.company_email);
-  if (!mail) return false;
-  return site === mail || site.endsWith(`.${mail}`) || mail.endsWith(`.${site}`);
-}
-
-export default function AdminEmployers({ initialRows }: { initialRows: Employer[] }) {
-  const [rows, setRows] = useState<Employer[]>(initialRows);
-  const [filter, setFilter] = useState<"pending" | "verified" | "rejected" | "all">("pending");
+export default function AdminEmployers({
+  initialEmployers,
+}: {
+  initialEmployers: AdminEmployer[];
+}) {
+  const [status, setStatus] = useState<Status>("pending");
+  const [rows, setRows] = useState<AdminEmployer[]>(initialEmployers);
+  const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [info, setInfo] = useState<string | null>(null);
-  const [loaded, setLoaded] = useState(true);
-  const firstFilterEffect = useRef(true);
+  const [error, setError] = useState("");
+  const [plans, setPlans] = useState<Record<string, string>>({});
 
-  const load = useCallback(async (status: typeof filter) => {
-    setErr(null);
-    setLoaded(false);
+  async function load(next: Status): Promise<void> {
+    setLoading(true);
+    setError("");
     try {
-      const res = await fetch(`/api/admin/employers?status=${status}&limit=100`);
-      const body = (await res.json().catch(() => null)) as { employers?: Employer[]; error?: string } | null;
+      const res = await fetch(`/api/admin/employers?status=${next}`, { cache: "no-store" });
+      const json = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setErr(body?.error ?? "Could not load employers.");
+        setError(json.error || "Something went wrong");
         return;
       }
-      setRows(Array.isArray(body?.employers) ? body.employers : []);
+      setRows(Array.isArray(json.employers) ? json.employers : []);
     } catch {
-      setErr("Network error - try again.");
+      setError("Network error");
     } finally {
-      setLoaded(true);
+      setLoading(false);
     }
-  }, []);
+  }
 
-  useEffect(() => {
-    if (firstFilterEffect.current) {
-      firstFilterEffect.current = false;
-      return;
-    }
-    void load(filter);
-  }, [filter, load]);
+  function selectTab(next: Status) {
+    setStatus(next);
+    void load(next);
+  }
 
-  const setPlan = async (employerId: string, plan: string) => {
+  async function act(employerId: string, action: Action, plan?: string): Promise<void> {
     if (busy) return;
-    setBusy(employerId + plan);
-    setErr(null);
+    setBusy(employerId);
+    setError("");
     try {
       const res = await fetch("/api/admin/employers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ employerId, action: "set_plan", plan }),
+        body: JSON.stringify(plan ? { employerId, action, plan } : { employerId, action }),
       });
+      const json = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setErr("Plan update failed - try again.");
+        setError(json.error || "Something went wrong");
         return;
       }
-      setInfo(`Plan set to ${plan}.`);
+      if (action === "set_plan" && plan) {
+        setPlans((prev) => ({ ...prev, [employerId]: plan }));
+      }
+      await load(status);
     } catch {
-      setErr("Network error - try again.");
+      setError("Network error");
     } finally {
       setBusy(null);
     }
-  };
-
-  const act = async (employerId: string, action: "verify" | "reject") => {
-    if (busy) return;
-    setBusy(employerId + action);
-    setErr(null);
-    try {
-      const res = await fetch("/api/admin/employers", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ employerId, action }),
-      });
-      if (!res.ok) {
-        setErr("Action failed - try again.");
-        return;
-      }
-      setRows((rs) =>
-        rs.map((r) =>
-          r.id === employerId
-            ? { ...r, verification_status: action === "verify" ? "verified" : "rejected" }
-            : r,
-        ),
-      );
-    } catch {
-      setErr("Network error - try again.");
-    } finally {
-      setBusy(null);
-    }
-  };
+  }
 
   return (
-    <div aria-busy={!loaded}>
+    <div aria-busy={loading}>
       <div className="flex flex-wrap items-center gap-2 mb-6" role="tablist" aria-label="Verification status filter">
-        {(["pending", "verified", "rejected", "all"] as const).map((s) => (
+        {TABS.map((tab) => (
           <button
-            key={s}
+            key={tab.value}
             type="button"
             role="tab"
-            aria-selected={filter === s}
-            onClick={() => setFilter(s)}
-            className={`btn btn-sm press ${filter === s ? "btn-primary" : "btn-secondary"}`}
+            aria-selected={status === tab.value}
+            className={status === tab.value ? "btn btn-sm press btn-primary" : "btn btn-sm press btn-secondary"}
+            onClick={() => selectTab(tab.value)}
           >
-            {s[0].toUpperCase() + s.slice(1)}
+            {tab.label}
           </button>
         ))}
       </div>
-      {err ? (
-        <p className="field-error mb-4" role="alert">
-          {err}
-        </p>
-      ) : null}
-      {info ? (
-        <p className="field-hint mb-4" role="status">
-          {info}
-        </p>
-      ) : null}
-      {!loaded ? (
-        <p className="field-hint mb-3" role="status">
-          Updating employer list… Existing rows stay visible until the new filter loads.
-        </p>
-      ) : null}
-      {rows.length === 0 ? (
-        loaded ? (
-          err ? null : <p className="empty-note">No employers in this bucket.</p>
-        ) : (
-          <p className="text-body" role="status">Loading employers…</p>
-        )
-      ) : (
-        <ul className="grid gap-3">
-          {rows.map((r) => (
-            <li
-              key={r.id}
-              className="rounded-2xl bg-surface border border-line p-5 flex flex-wrap items-center justify-between gap-4"
-            >
+      <div aria-live="polite">
+        {error && <p className="field-error mb-3">{error}</p>}
+      </div>
+      <ul className="grid gap-3">
+        {rows.map((row) => {
+          const isPending = row.verification_status === "pending";
+          const match = domainMatches(row.company_email, row.website);
+          const meta = [row.company_email, row.industry, row.company_size].filter(
+            (v): v is string => typeof v === "string" && v.length > 0,
+          );
+          const created = row.created_at ? row.created_at.slice(0, 10) : "";
+          const locked = busy !== null;
+          return (
+            <li key={row.id} className="rounded-2xl bg-surface border border-line p-5 flex flex-wrap items-center justify-between gap-4">
               <div className="min-w-0">
                 <p className="font-semibold text-ink">
-                  {r.company_name ?? "Unnamed company"}{" "}
-                  {domainMatch(r) ? (
-                    <span className="meta-chip" title="Work email domain matches the company website">
-                      domain match
-                    </span>
-                  ) : (
-                    <span className="meta-chip" title="Work email domain does not match the company website">
-                      no domain match
-                    </span>
-                  )}
+                  {row.company_name ?? "Employer"}{" "}
+                  <span className="meta-chip" title={match ? "Work email domain matches the company website" : "Work email domain does not match the company website"}>
+                    {match ? "domain match" : "no domain match"}
+                  </span>
                 </p>
-                <p className="text-[13px] text-muted mt-1">
-                  {[r.account_email ?? r.company_email, r.industry, r.company_size].filter(Boolean).join(" · ")}
-                </p>
+                <p className="text-[13px] text-muted mt-1">{meta.join(" · ")}</p>
                 <p className="text-[13px] mt-1 flex flex-wrap gap-x-3 gap-y-1">
-                  {r.website ? (
-                    <a
-                      href={r.website.startsWith("http") ? r.website : `https://${r.website}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="underline decoration-muted underline-offset-2"
-                    >
+                  {row.website && (
+                    <a href={row.website} target="_blank" rel="noopener noreferrer" className="underline decoration-muted underline-offset-2">
                       Website
                     </a>
-                  ) : null}
-                  {r.linkedin_url ? (
-                    <a
-                      href={r.linkedin_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="underline decoration-muted underline-offset-2"
-                    >
+                  )}
+                  {row.linkedin_url ? (
+                    <a href={row.linkedin_url} target="_blank" rel="noopener noreferrer" className="underline decoration-muted underline-offset-2">
                       LinkedIn
                     </a>
                   ) : (
@@ -214,52 +149,49 @@ export default function AdminEmployers({ initialRows }: { initialRows: Employer[
                   )}
                 </p>
                 <p className="font-mono text-[11px] text-muted mt-1">
-                  {r.verification_status ?? "pending"}
-                  {r.created_at ? ` · since ${String(r.created_at).slice(0, 10)}` : ""}
+                  {row.verification_status ?? "unknown"}
+                  {created && ` · since ${created}`}
                 </p>
               </div>
-              {r.verification_status === "pending" ? (
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    className="btn btn-primary btn-sm press"
-                    disabled={busy !== null}
-                    onClick={() => void act(r.id, "verify")}
-                  >
-                    {busy === r.id + "verify" ? "Saving…" : "Verify"}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm press"
-                    disabled={busy !== null}
-                    onClick={() => void act(r.id, "reject")}
-                  >
-                    {busy === r.id + "reject" ? "Saving…" : "Reject"}
-                  </button>
-                </div>
-              ) : (
-                <div className="flex items-center gap-2">
-                  <label className="font-mono text-[11px] text-muted" htmlFor={`plan-${r.id}`}>
-                    Plan
-                  </label>
-                  <select
-                    id={`plan-${r.id}`}
-                    className="input"
-                    style={{ maxWidth: 130 }}
-                    defaultValue="free"
-                    disabled={busy !== null}
-                    onChange={(e) => void setPlan(r.id, e.target.value)}
-                    aria-label={`Billing plan for ${r.company_name ?? r.id}`}
-                  >
-                    <option value="free">free · 25/mo</option>
-                    <option value="basic">basic · 500/mo</option>
-                    <option value="pro">pro · 2000/mo</option>
-                  </select>
-                </div>
-              )}
+              <div className="flex items-center gap-2">
+                {isPending ? (
+                  <>
+                    <button type="button" className="btn btn-primary btn-sm press" disabled={locked} onClick={() => void act(row.id, "verify")}>
+                      Verify
+                    </button>
+                    <button type="button" className="btn btn-secondary btn-sm press" disabled={locked} onClick={() => void act(row.id, "reject")}>
+                      Reject
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <label className="font-mono text-[11px] text-muted" htmlFor={`plan-${row.id}`}>
+                      Plan
+                    </label>
+                    <select
+                      id={`plan-${row.id}`}
+                      className="input"
+                      style={{ maxWidth: 130 }}
+                      aria-label={`Billing plan for ${row.company_name ?? "employer"}`}
+                      value={plans[row.id] ?? "free"}
+                      disabled={locked}
+                      onChange={(e) => void act(row.id, "set_plan", e.target.value)}
+                    >
+                      {PLANS.map((plan) => (
+                        <option key={plan.value} value={plan.value}>
+                          {plan.label}
+                        </option>
+                      ))}
+                    </select>
+                  </>
+                )}
+              </div>
             </li>
-          ))}
-        </ul>
+          );
+        })}
+      </ul>
+      {rows.length === 0 && !error && (
+        <p className="text-[13px] text-muted mt-1">No employers in this view.</p>
       )}
     </div>
   );

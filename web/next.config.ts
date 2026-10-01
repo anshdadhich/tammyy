@@ -15,9 +15,6 @@ const csp = [
 ].join("; ");
 
 const nextConfig: NextConfig = {
-  experimental: {
-    optimizePackageImports: ["lucide-react", "motion"],
-  },
   images: {
     unoptimized: true,
     remotePatterns: [
