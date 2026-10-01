@@ -1,8 +1,4 @@
-import { supabaseBrowser } from "@/lib/supabase";
-
 export type ViewerSession = { kind: "hr" | "owner"; name?: string; email: string; isAdmin?: boolean };
-
-const HR_DISPLAY_COOKIE = "tammy_hr_display";
 
 export const SESSION_EVENT = "tammy-session-changed";
 
@@ -11,6 +7,11 @@ const REMEMBER_TTL_MS = 10 * 60_000;
 
 type RememberedViewer = ViewerSession & { ts: number };
 
+/**
+ * Optimistic last-known viewer so the nav can paint an avatar instantly on
+ * repeat visits. NEVER authoritative: the server response from
+ * fetchViewer() always wins. Cleared on sign-out.
+ */
 export function rememberViewer(v: ViewerSession | null): void {
   if (typeof document === "undefined") return;
   try {
@@ -51,118 +52,73 @@ function notifySessionChanged() {
   window.dispatchEvent(new Event(SESSION_EVENT));
 }
 
-function readDisplayCookie(): ViewerSession | null {
-  if (typeof document === "undefined") return null;
-  const entry = document.cookie
-    .split("; ")
-    .find((c) => c.startsWith(`${HR_DISPLAY_COOKIE}=`));
-  if (!entry) return null;
+type MeResponse = {
+  authenticated?: unknown;
+  viewer?: {
+    kind?: unknown;
+    name?: unknown;
+    email?: unknown;
+    isAdmin?: unknown;
+  } | null;
+};
+
+function parseViewer(data: MeResponse | null): ViewerSession | null {
+  const v = data?.viewer;
+  if (!v || typeof v !== "object") return null;
+  if (typeof v.email !== "string" || !v.email.includes("@")) return null;
+  if (v.kind !== "hr" && v.kind !== "owner") return null;
+  return {
+    kind: v.kind,
+    name: typeof v.name === "string" && v.name.trim() ? v.name : undefined,
+    email: v.email,
+    isAdmin: v.isAdmin === true,
+  };
+}
+
+/**
+ * Authoritative session read: GET /api/auth/me reads the httpOnly
+ * `tammy_session` cookie server-side. Returns null when signed out.
+ * Network/5xx failures throw (callers keep their optimistic state)
+ * rather than being mistaken for "signed out".
+ */
+export async function fetchViewer(): Promise<ViewerSession | null> {
+  const res = await fetch("/api/auth/me", { cache: "no-store" });
+  if (!res.ok) {
+    throw new Error(`session check failed: ${res.status}`);
+  }
+  const data = (await res.json().catch(() => null)) as MeResponse | null;
+  const viewer = parseViewer(data);
+  if (viewer) rememberViewer(viewer);
+  else rememberViewer(null);
+  return viewer;
+}
+
+/** Best-effort viewer read: failures resolve to null without clobbering UI. */
+export async function fetchViewerSafe(): Promise<ViewerSession | null> {
   try {
-    const parsed = JSON.parse(
-      decodeURIComponent(entry.slice(HR_DISPLAY_COOKIE.length + 1)),
-    ) as { name?: unknown; email?: unknown };
-    if (parsed && typeof parsed.email === "string" && parsed.email.includes("@")) {
-      return {
-        kind: "hr",
-        name:
-          typeof parsed.name === "string" && parsed.name.trim()
-            ? parsed.name
-            : undefined,
-        email: parsed.email,
-      };
-    }
+    return await fetchViewer();
   } catch {
+    return null;
   }
-  return null;
 }
 
-function clearDisplayCookie() {
-  if (typeof document === "undefined") return;
-  document.cookie = `${HR_DISPLAY_COOKIE}=; path=/; max-age=0; SameSite=Lax`;
-}
-
-function metadataName(v: unknown): string | undefined {
-  if (!v || typeof v !== "object") return undefined;
-  const m = v as Record<string, unknown>;
-  for (const k of ["full_name", "name", "display_name"]) {
-    const s = m[k];
-    if (typeof s === "string" && s.trim()) return s.trim().slice(0, 100);
-  }
-  return undefined;
-}
-
-export function readHrSession(): ViewerSession | null {
-  return readDisplayCookie();
-}
-
-export async function fetchHrSession(): Promise<ViewerSession | null> {
+/**
+ * Sign out: revoke the server session, clear optimistic state, notify
+ * listeners. Always resolves.
+ */
+export async function signOut(): Promise<void> {
   try {
-    const res = await fetch("/api/session/hr");
-    if (!res.ok) return null;
-    const data = (await res.json().catch(() => null)) as {
-      email?: unknown;
-      name?: unknown;
-      isAdmin?: unknown;
-    } | null;
-    if (data && typeof data.email === "string" && data.email.includes("@")) {
-      const viewer: ViewerSession = {
-        kind: "hr",
-        name:
-          typeof data.name === "string" && data.name.trim() ? data.name : undefined,
-        email: data.email,
-        isAdmin: data.isAdmin === true,
-      };
-      rememberViewer(viewer);
-      return viewer;
-    }
-  } catch {
-  }
-  return null;
-}
-
-export async function fetchOwnerSession(): Promise<ViewerSession | null> {
-  try {
-    const client = supabaseBrowser();
-    const { data: sessData } = await client.auth.getSession();
-    const sessEmail = sessData.session?.user?.email;
-    if (sessEmail && sessEmail.includes("@")) {
-      const viewer: ViewerSession = {
-        kind: "owner",
-        name: metadataName(sessData.session?.user?.user_metadata),
-        email: sessEmail,
-      };
-      rememberViewer(viewer);
-      return viewer;
-    }
-    const { data } = await client.auth.getUser();
-    const email = data.user?.email;
-    if (!email || !email.includes("@")) return null;
-    const viewer: ViewerSession = {
-      kind: "owner",
-      name: metadataName(data.user?.user_metadata),
-      email,
-    };
-    rememberViewer(viewer);
-    return viewer;
-  } catch {
-  }
-  return null;
-}
-
-export function clearHrSession() {
-  clearDisplayCookie();
-  rememberViewer(null);
-  notifySessionChanged();
-}
-
-export async function clearOwnerSession() {
-  try {
-    await supabaseBrowser().auth.signOut();
+    await fetch("/api/auth/logout", { method: "POST" });
   } catch {
   }
   rememberViewer(null);
   notifySessionChanged();
 }
+
+/** @deprecated Use signOut(). Kept for existing call sites. */
+export const clearHrSession = signOut;
+/** @deprecated Use signOut(). Kept for existing call sites. */
+export const clearOwnerSession = signOut;
 
 export function viewerInitials(viewer: ViewerSession): string {
   if (viewer.name) {

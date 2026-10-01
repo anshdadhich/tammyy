@@ -1,31 +1,28 @@
-import { clearSessionCookie, getViewerAuth, OWNER_COOKIE } from "@/lib/api-auth";
-import { userDb } from "@/lib/supabase-user";
-import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
+import { authSessionPayload, getSessionUser } from "@/lib/auth-user";
+import { destroySession } from "@/lib/session";
 
-export async function GET() {
-  const viewer = await getViewerAuth();
-  if (viewer.kind === "owner") {
-    return Response.json({ email: viewer.email, name: null });
-  }
-  return Response.json({ email: null, name: null });
-}
-
-export async function DELETE() {
+/**
+ * GET /api/session/owner — candidate identity snapshot. Role-based so it
+ * always agrees with /api/auth/me (candidate rows count even without a
+ * linked profile).
+ */
+export async function GET(): Promise<Response> {
   try {
-    const db = await userDb();
-    await db.auth.signOut();
+    const session = await getSessionUser();
+    if (session) {
+      const payload = authSessionPayload(session);
+      if (payload.viewer?.kind === "owner") {
+        return Response.json({ email: payload.viewer.email, name: null });
+      }
+    }
+    return Response.json({ email: null, name: null });
   } catch {
+    return Response.json({ email: null, name: null });
   }
-  const res = Response.json({ ok: true });
-  res.headers.append("Set-Cookie", clearSessionCookie(OWNER_COOKIE));
-  return res;
 }
 
-export async function PATCH(request: Request) {
-  const rl = rateLimit(request, { key: "session-owner", limit: 20, windowMs: 10 * 60_000 });
-  if (!rl.ok) return rateLimitResponse(rl.retryAfterMs);
-  return Response.json(
-    { error: "Use email code login at /api/auth/otp" },
-    { status: 410 },
-  );
+/** DELETE — revoke the session (server + cookie). */
+export async function DELETE(): Promise<Response> {
+  await destroySession();
+  return Response.json({ ok: true });
 }

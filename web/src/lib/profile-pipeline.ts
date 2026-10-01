@@ -1,7 +1,7 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { NonRetriableError } from "inngest";
 import { inngest } from "@/lib/inngest";
-import { supabaseAdmin } from "@/lib/supabase";
+import { AppDoc, Collections, getDb } from "@/lib/mongo";
 import { embedChunks } from "@/lib/matching/voyage";
 import { profileReadyEmail, sendEmail } from "@/lib/email";
 import { analyzeProjectDepth, generateCandidateSummary } from "@/lib/ai";
@@ -33,15 +33,25 @@ export const processProfile = inngest.createFunction(
     if (!candidateId || typeof candidateId !== "string") {
       throw new NonRetriableError("invalid candidateId");
     }
-    const db = supabaseAdmin();
+    const db = await getDb();
 
     const candidate = await step.run("fetch-candidate", async () => {
-      const r = await db
-        .from("candidates")
-        .select("id, headline, domain, total_experience_years, visibility_status")
-        .eq("id", candidateId)
-        .single();
-      return r.data as { id: string; headline: string | null; domain: string | null; total_experience_years: number | null; visibility_status?: string | null } | null;
+      // Same contract as the old `.single()` (error → null → non-retriable).
+      try {
+        const r = await db.collection<AppDoc>(Collections.candidates).findOne(
+          { _id: candidateId },
+          { projection: { headline: 1, domain: 1, total_experience_years: 1, visibility_status: 1, _id: 0 } },
+        );
+        if (!r) return null;
+        return {
+          headline: (r.headline as string | null) ?? null,
+          domain: (r.domain as string | null) ?? null,
+          total_experience_years: (r.total_experience_years as number | null) ?? null,
+          visibility_status: (r.visibility_status as string | null) ?? null,
+        };
+      } catch {
+        return null;
+      }
     });
     if (!candidate) throw new NonRetriableError("candidate not found");
     if (candidate.visibility_status && candidate.visibility_status !== "visible") {
@@ -49,40 +59,85 @@ export const processProfile = inngest.createFunction(
     }
 
     const bundle = await step.run("fetch-context", async () => {
-      const [
-        { data: projects, error: projectsErr },
-        { data: experiences, error: expErr },
-        { data: skillRows, error: skillsErr },
-      ] = await Promise.all([
-        db
-          .from("projects")
-          .select("id, title, description, tech_stack, impact_summary")
-          .eq("candidate_id", candidateId)
-          .order("created_at", { ascending: false })
-          .limit(MAX_PROJECTS),
-        db
-          .from("work_experiences")
-          .select("company_name, job_title, description")
-          .eq("candidate_id", candidateId)
-          .limit(10),
-        db
-          .from("candidate_skills")
-          .select("skills(name)")
-          .eq("candidate_id", candidateId)
-          .limit(50),
-      ]);
-      if (projectsErr) throw projectsErr;
-      if (expErr) console.error(`[pipeline] experiences read failed for ${candidateId}`);
-      if (skillsErr) console.error(`[pipeline] skills read failed for ${candidateId}`);
-      const skills = ((skillRows ?? []) as unknown as { skills: { name: string } | { name: string }[] | null }[])
-        .flatMap((s) => (Array.isArray(s.skills) ? s.skills : s.skills ? [s.skills] : []))
-        .map((s) => s.name)
-        .filter(Boolean);
-      return {
-        projects: ((projects ?? []) as { id: string; title: string; description: string | null; tech_stack: string[] | null; impact_summary: string | null }[]),
-        experiences: ((experiences ?? []) as { company_name: string | null; job_title: string | null; description: string | null }[]),
-        skills,
+      type ProjectRow = {
+        id: string;
+        title: string;
+        description: string | null;
+        tech_stack: string[] | null;
+        impact_summary: string | null;
       };
+      type ExpRow = {
+        company_name: string | null;
+        job_title: string | null;
+        description: string | null;
+      };
+
+      const projectsPromise: Promise<ProjectRow[]> = db
+        .collection<AppDoc>(Collections.projects)
+        .find(
+          { candidate_id: candidateId },
+          { projection: { title: 1, description: 1, tech_stack: 1, impact_summary: 1 } },
+        )
+        .sort({ created_at: -1 })
+        .limit(MAX_PROJECTS)
+        .toArray()
+        .then((rows) =>
+          rows.map((r) => ({
+            id: r._id,
+            title: String(r.title ?? ""),
+            description: (r.description as string | null) ?? null,
+            tech_stack: (r.tech_stack as string[] | null) ?? null,
+            impact_summary: (r.impact_summary as string | null) ?? null,
+          })),
+        );
+
+      const experiencesPromise: Promise<ExpRow[]> = (async () => {
+        try {
+          const rows = await db
+            .collection<AppDoc>(Collections.workExperiences)
+            .find(
+              { candidate_id: candidateId },
+              { projection: { company_name: 1, job_title: 1, description: 1, _id: 0 } },
+            )
+            .limit(10)
+            .toArray();
+          return rows.map((r) => ({
+            company_name: (r.company_name as string | null) ?? null,
+            job_title: (r.job_title as string | null) ?? null,
+            description: (r.description as string | null) ?? null,
+          }));
+        } catch {
+          console.error(`[pipeline] experiences read failed for ${candidateId}`);
+          return [] as ExpRow[];
+        }
+      })();
+
+      const skillsPromise: Promise<string[]> = (async () => {
+        try {
+          const links = await db
+            .collection<AppDoc>(Collections.candidateSkills)
+            .find({ candidate_id: candidateId }, { projection: { skill_id: 1, _id: 0 } })
+            .limit(50)
+            .toArray();
+          const skillIds = [...new Set(links.map((l) => String(l.skill_id ?? "")).filter(Boolean))];
+          if (!skillIds.length) return [] as string[];
+          const skillDocs = await db
+            .collection<AppDoc>(Collections.skills)
+            .find({ _id: { $in: skillIds } }, { projection: { name: 1 } })
+            .toArray();
+          return skillDocs.map((s) => String(s.name ?? "")).filter(Boolean);
+        } catch {
+          console.error(`[pipeline] skills read failed for ${candidateId}`);
+          return [] as string[];
+        }
+      })();
+
+      const [projects, experiences, skills] = await Promise.all([
+        projectsPromise,
+        experiencesPromise,
+        skillsPromise,
+      ]);
+      return { projects, experiences, skills };
     });
     const { projects, experiences, skills } = bundle;
 
@@ -128,12 +183,21 @@ export const processProfile = inngest.createFunction(
         })),
       });
       if (summary) {
-        const { error: sumErr } = await db.from("candidate_profiles").upsert({
-          candidate_id: candidateId,
-          summary_markdown: summary.markdown,
-          summary_json: summary.json,
-        }, { onConflict: "candidate_id" });
-        if (sumErr) throw sumErr;
+        // onConflict "candidate_id" → upsert keyed by candidate_id; the
+        // updated_at trigger on candidate_profiles is applied in $set.
+        await db.collection<AppDoc>(Collections.candidateProfiles).updateOne(
+          { candidate_id: candidateId },
+          {
+            $set: {
+              candidate_id: candidateId,
+              summary_markdown: summary.markdown,
+              summary_json: summary.json,
+              updated_at: new Date(),
+            },
+            $setOnInsert: { _id: randomUUID(), created_at: new Date() },
+          },
+          { upsert: true },
+        );
       }
       return { ok: !!summary };
     });
@@ -148,17 +212,23 @@ export const processProfile = inngest.createFunction(
           impact: p.impact_summary ?? "",
         });
         if (!depth) return { ok: false, skipped: true as const };
-        const { error: depthErr } = await db.from("project_depth_analysis").upsert({
-          project_id: p.id,
-          complexity_score: typeof depth.complexity_score === "number" ? depth.complexity_score : 5,
-          technical_complexity: String(depth.technical_complexity ?? "medium"),
-          architectural_concepts: (depth.architectural_concepts as string[]) ?? [],
-          evidence_quality: String(depth.evidence_quality ?? "moderate"),
-          autonomy_level: String(depth.autonomy_level ?? "unknown"),
-          relevance_tags: (depth.relevance_tags as string[]) ?? [],
-          raw_ai_analysis: depth,
-        }, { onConflict: "project_id" });
-        if (depthErr) throw depthErr;
+        await db.collection<AppDoc>(Collections.projectDepthAnalysis).updateOne(
+          { project_id: p.id },
+          {
+            $set: {
+              project_id: p.id,
+              complexity_score: typeof depth.complexity_score === "number" ? depth.complexity_score : 5,
+              technical_complexity: String(depth.technical_complexity ?? "medium"),
+              architectural_concepts: (depth.architectural_concepts as string[]) ?? [],
+              evidence_quality: String(depth.evidence_quality ?? "moderate"),
+              autonomy_level: String(depth.autonomy_level ?? "unknown"),
+              relevance_tags: (depth.relevance_tags as string[]) ?? [],
+              raw_ai_analysis: depth,
+            },
+            $setOnInsert: { _id: randomUUID(), created_at: new Date() },
+          },
+          { upsert: true },
+        );
         return { ok: true };
       });
     }
@@ -171,20 +241,20 @@ export const processProfile = inngest.createFunction(
           wev.end({ status: 200 });
           return { embedded: 0 };
         }
-        const { data: existing } = await db
-          .from("profile_chunks")
-          .select("content_text, embedding_dim")
-          .eq("candidate_id", candidateId);
+        const existing = await db
+          .collection<AppDoc>(Collections.profileChunks)
+          .find({ candidate_id: candidateId }, { projection: { content_text: 1, embedding_dim: 1, _id: 0 } })
+          .toArray();
         const oldHashes = new Set<string>();
-        for (const r of ((existing ?? []) as { content_text: string; embedding_dim: number | null }[])) {
+        for (const r of existing) {
           if ((r.embedding_dim ?? EXPECTED_EMBEDDING_DIM) === EXPECTED_EMBEDDING_DIM) {
-            oldHashes.add(contentHash(r.content_text));
+            oldHashes.add(contentHash(String(r.content_text ?? "")));
           }
         }
         const changed = chunks.filter((c) => !oldHashes.has(contentHash(c.content_text)));
         const fresh = new Set(chunks.map((c) => c.content_text));
-        const stale = ((existing ?? []) as { content_text: string }[])
-          .map((r) => r.content_text)
+        const stale = existing
+          .map((r) => String(r.content_text ?? ""))
           .filter((t) => !fresh.has(t));
         if (!changed.length && !stale.length) {
           wev.add({ candidate_id: candidateId, embed_failed: false, degraded: false });
@@ -204,22 +274,20 @@ export const processProfile = inngest.createFunction(
             }
           }
           const rows = changed.map((c: Record<string, unknown>, i: number) => ({
+            _id: randomUUID(),
             ...c,
-            embedding: `[${vectors[i].join(",")}]`,
+            embedding: vectors[i],
             embedding_model: EMBEDDING_MODEL,
             embedding_dim: vectors[i].length,
           }));
-          const { error } = await db.from("profile_chunks").insert(rows);
-          if (error) throw error;
+          await db.collection<AppDoc>(Collections.profileChunks).insertMany(rows);
           embedded = rows.length;
         }
         if (stale.length) {
-          const { error: delError } = await db
-            .from("profile_chunks")
-            .delete()
-            .eq("candidate_id", candidateId)
-            .in("content_text", stale);
-          if (delError) throw delError;
+          await db.collection<AppDoc>(Collections.profileChunks).deleteMany({
+            candidate_id: candidateId,
+            content_text: { $in: stale },
+          });
         }
         wev.add({ candidate_id: candidateId, embed_failed: false, degraded: false });
         wev.end({ status: 200 });
@@ -241,8 +309,16 @@ export const processProfile = inngest.createFunction(
       if (experiences.length) q += 10;
       if (skills.length >= 3) q += 10;
       if (candidate.headline) q += 5;
-      const { error: qErr } = await db.from("candidates").update({ profile_strength: Math.min(q, 100), freshness_updated_at: new Date().toISOString() }).eq("id", candidateId);
-      if (qErr) throw qErr;
+      await db.collection<AppDoc>(Collections.candidates).updateOne(
+        { _id: candidateId },
+        {
+          $set: {
+            profile_strength: Math.min(q, 100),
+            freshness_updated_at: new Date(),
+            updated_at: new Date(),
+          },
+        },
+      );
     });
 
     const notified = await step.run("notify-ready", async () => {
@@ -250,12 +326,21 @@ export const processProfile = inngest.createFunction(
       let outcome = "skipped";
       let reason = "no recipient";
       try {
-        const { data } = await db
-          .from("candidates")
-          .select("full_name, contact_email")
-          .eq("id", candidateId)
-          .single();
-        const c = data as { full_name?: string; contact_email?: string } | null;
+        let c: { full_name?: string; contact_email?: string } | null = null;
+        try {
+          const r = await db.collection<AppDoc>(Collections.candidates).findOne(
+            { _id: candidateId },
+            { projection: { full_name: 1, contact_email: 1, _id: 0 } },
+          );
+          c = r
+            ? {
+                full_name: (r.full_name as string | undefined) ?? undefined,
+                contact_email: (r.contact_email as string | undefined) ?? undefined,
+              }
+            : null;
+        } catch {
+          c = null;
+        }
         if (c?.contact_email) {
           const tpl = profileReadyEmail(c.full_name ?? "there", candidateId);
           const result = await withTimeout(sendEmail(c.contact_email, tpl.subject, tpl.html), EMAIL_TIMEOUT_MS);

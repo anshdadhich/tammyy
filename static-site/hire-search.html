@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Search talent · Tammy</title>
+<meta name="description" content="Describe the target role in plain English - requirements are parsed automatically and matched against verified candidates.">
+<script>(function(){try{var t=localStorage.getItem("tammy_theme");var d=t==="dark"||(t===null&&window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.setAttribute("data-theme",d?"dark":"light")}catch(e){}})()</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@100..900&family=Geist:wght@100..900&display=swap" rel="stylesheet">
+<style>:root{--font-geist-sans:"Geist";--font-geist-mono:"Geist Mono"}</style>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="relative min-h-screen bg-paper text-body antialiased selection:bg-brand selection:text-on-brand">
+<a href="#main-content" class="skip-link">Skip to content</a>
+<header class="site-navbar-wrap">
+  <div class="site-navbar !px-[max(24px,calc((100%_-_1160px)/2))]">
+    <a href="index.html" class="site-brand site-brand-text">Tammy</a>
+    <nav aria-label="Main navigation" class="site-navigation hidden lg:flex">
+      <div class="site-nav-links">
+        <a href="index.html" class="site-nav-link press" style="position: relative">
+          <span style="position: relative">Home</span>
+        </a>
+        <a href="hire.html" class="site-nav-link press is-active" style="position: relative" aria-current="page">
+          <span class="site-nav-pill"></span>
+          <span style="position: relative">Hiring</span>
+        </a>
+      </div>
+    </nav>
+    <div class="site-nav-actions">
+      <div class="nav-menu-wrap">
+        <button type="button" class="nav-avatar press" aria-haspopup="menu" aria-expanded="false" aria-label="Account menu">ET</button>
+      </div>
+      <a href="hire-search.html" class="site-login press h-10">Search</a>
+      <button type="button" class="theme-toggle press" aria-label="Toggle color theme" title="Toggle light / dark theme">
+        <svg class="theme-icon-sun" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+        <svg class="theme-icon-moon" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+      </button>
+      <button type="button" class="site-nav-burger lg:hidden press" aria-expanded="false" aria-label="Open menu">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+<main id="main-content">
+
+<!-- ============ COMPOSE (SearchHero + SessionLine + ComposeView) ============ -->
+<div class="max-w-[860px] mx-auto px-6 pb-24">
+  <section class="pt-16 lg:pt-24 pb-8">
+    <div class="text-center">
+      <h1 class="rise text-[clamp(2rem,4.6vw,3.25rem)] font-semibold tracking-[-0.03em] leading-[1.06] text-ink" style="--d:60ms">Who do you need?</h1>
+      <p class="rise mt-4 text-[17px] leading-[1.6] text-muted max-w-[560px] mx-auto" style="--d:160ms">Describe your target role in plain English. Requirements get parsed automatically and matched against verified candidates.</p>
+    </div>
+  </section>
+
+  <div class="flex flex-wrap items-center justify-center gap-2.5 mb-5 text-[13px] text-muted">
+    <span class="pulse-dot inline-block w-2 h-2 rounded-full" style="background: var(--success)" aria-hidden="true"></span>
+    <span class="font-mono text-[11.5px] uppercase tracking-[0.14em]">Demo Logistics Co · employer@test.com</span>
+    <span aria-hidden="true">·</span>
+    <a href="hire-login.html" class="text-muted underline hover:text-brand-text transition-colors">Switch session</a>
+  </div>
+
+  <div class="sq-try">
+    <span class="sq-try-label">Try</span>
+    <button type="button" class="chip-toggle">Designer · fintech · remote</button>
+    <button type="button" class="chip-toggle">Backend · Node/Postgres</button>
+    <button type="button" class="chip-toggle">Design systems lead</button>
+  </div>
+
+  <div class="composer">
+    <textarea class="composer-input" maxlength="10000" placeholder="Describe the role you're hiring for…" aria-label="Describe the role you're hiring for">Backend engineer on Node/Postgres - designs the service boundaries, owns the schema, and keeps p95 honest under load. Payments experience is a plus; rigor is the requirement.</textarea>
+    <div class="composer-bar">
+      <div class="flex flex-wrap items-center gap-2.5 min-w-0">
+        <button type="button" class="chip-toggle is-on" aria-pressed="true"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z"/><path d="M20 2v4"/><path d="M22 4h-4"/><circle cx="4" cy="20" r="2"/></svg> Deep read</button>
+        <span class="sq-hint"><span class="sq-kbd">⏎</span> search<span aria-hidden="true"> · </span><span class="sq-kbd">⇧⏎</span> newline</span>
+      </div>
+      <button type="button" class="send-btn" aria-label="Run search"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></button>
+    </div>
+  </div>
+
+  <div class="rounded-2xl bg-surface shadow-soft-md mt-5 overflow-hidden">
+    <button type="button" class="btn-plain flex w-full items-center justify-between gap-3 sq-refine-head" aria-expanded="true">
+      <span class="flex items-center gap-3 min-w-0">
+        <span class="sq-refine-ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><rect width="20" height="14" x="2" y="6" rx="2"/></svg></span>
+        <span class="min-w-0 text-left">
+          <span class="block text-[15px] font-semibold text-ink tracking-[-0.01em]">Refine constraints</span>
+          <span class="sq-refine-sum">Mid · Remote · any experience · 2 must-haves</span>
+        </span>
+      </span>
+      <span class="flex items-center gap-1.5 text-[13px] text-muted flex-none">Collapse<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="transition-transform rotate-90" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></span>
+    </button>
+
+    <div class="px-5 pb-6 pt-5 border-t border-line grid gap-6 sq-refine-body">
+      <div class="grid gap-5 sm:grid-cols-2">
+        <div class="field">
+          <span class="field-label">Seniority</span>
+          <div class="seg" role="group" aria-label="Seniority">
+            <button type="button" class="seg-btn" aria-pressed="false">Intern</button>
+            <button type="button" class="seg-btn" aria-pressed="false">Junior</button>
+            <button type="button" class="seg-btn is-on" aria-pressed="true">Mid</button>
+            <button type="button" class="seg-btn" aria-pressed="false">Senior</button>
+            <button type="button" class="seg-btn" aria-pressed="false">Lead</button>
+            <button type="button" class="seg-btn" aria-pressed="false">Staff</button>
+          </div>
+        </div>
+        <div class="field">
+          <span class="field-label">Work mode</span>
+          <div class="seg" role="group" aria-label="Work mode">
+            <button type="button" class="seg-btn is-on" aria-pressed="true">Remote</button>
+            <button type="button" class="seg-btn" aria-pressed="false">Hybrid</button>
+            <button type="button" class="seg-btn" aria-pressed="false">On-site</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="field">
+        <span class="field-label">Experience range</span>
+        <div class="flex flex-wrap gap-2 mt-1">
+          <button type="button" class="chip-toggle is-on" aria-pressed="true">Any</button>
+          <button type="button" class="chip-toggle" aria-pressed="false">1–3 years</button>
+          <button type="button" class="chip-toggle" aria-pressed="false">3–5 years</button>
+          <button type="button" class="chip-toggle" aria-pressed="false">5–8 years</button>
+          <button type="button" class="chip-toggle" aria-pressed="false">8+ years</button>
+        </div>
+      </div>
+
+      <div>
+        <div class="field content-start">
+          <label class="field-label" for="refine-skills">Skills &amp; tech stack<span class="req" aria-hidden="true">*</span></label>
+          <div class="chips">
+            <span class="chip">Node.js<button type="button" class="chip-x" aria-label="Remove Node.js"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></span>
+            <span class="chip">PostgreSQL<button type="button" class="chip-x" aria-label="Remove PostgreSQL"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></span>
+          </div>
+          <div class="relative">
+            <input id="refine-skills" class="input" style="padding-right:38px" role="combobox" aria-expanded="false" aria-autocomplete="list" placeholder="+ Add skill…" maxlength="100" autocomplete="off">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-muted" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+          </div>
+          <span class="field-hint">The bar to clear - these are the must-haves.</span>
+        </div>
+        <div class="flex flex-wrap items-center gap-2 mt-3">
+          <span class="sq-try-label">Suggestions</span>
+          <button type="button" class="chip-toggle" aria-pressed="false"><span aria-hidden="true">+</span>Figma</button>
+          <button type="button" class="chip-toggle" aria-pressed="false"><span aria-hidden="true">+</span>React</button>
+          <button type="button" class="chip-toggle" aria-pressed="false"><span aria-hidden="true">+</span>TypeScript</button>
+          <button type="button" class="chip-toggle is-on" aria-pressed="true">Node.js</button>
+          <button type="button" class="chip-toggle" aria-pressed="false"><span aria-hidden="true">+</span>Go</button>
+          <button type="button" class="chip-toggle is-on" aria-pressed="true">PostgreSQL</button>
+          <button type="button" class="chip-toggle" aria-pressed="false"><span aria-hidden="true">+</span>Python</button>
+          <button type="button" class="chip-toggle" aria-pressed="false"><span aria-hidden="true">+</span>Redis</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <span class="field-label">Target compensation (annual)</span>
+        <div class="grid gap-3 sm:grid-cols-2">
+          <div class="field mb-0">
+            <label class="field-label" for="refine-currency">Currency</label>
+            <select id="refine-currency" class="select">
+              <option selected>INR</option>
+              <option>USD</option>
+              <option>EUR</option>
+              <option>GBP</option>
+              <option>SGD</option>
+              <option>AED</option>
+              <option>AUD</option>
+              <option>CAD</option>
+            </select>
+          </div>
+          <div class="field mb-0">
+            <label class="field-label" for="refine-amount">Amount</label>
+            <input id="refine-amount" class="input" inputmode="numeric" placeholder="e.g. 50000">
+          </div>
+        </div>
+      </div>
+
+      <div class="grid gap-4 sm:grid-cols-2">
+        <div class="field mb-0">
+          <label class="field-label" for="refine-domain">Domain</label>
+          <select id="refine-domain" class="select">
+            <option selected>Software Development</option>
+            <option>Data / AI</option>
+            <option>Design</option>
+            <option>Marketing</option>
+            <option>Sales</option>
+            <option>Product</option>
+            <option>Operations</option>
+            <option>Finance</option>
+            <option>HR</option>
+            <option>Other</option>
+          </select>
+        </div>
+        <div class="field mb-0">
+          <label class="field-label" for="refine-employment">Employment</label>
+          <select id="refine-employment" class="select">
+            <option selected>full-time</option>
+            <option>part-time</option>
+            <option>contract</option>
+            <option>internship</option>
+            <option>freelance</option>
+          </select>
+        </div>
+      </div>
+
+      <label class="check">
+        <input type="checkbox">
+        <span>Must be open to relocation</span>
+      </label>
+    </div>
+  </div>
+
+  <div class="mt-6">
+    <button type="button" class="btn-link">View last results (6) <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></button>
+  </div>
+</div>
+
+<!-- ============ RESULTS (ResultsView + inline CandidateDetail) ============ -->
+<div class="w-full px-4 sm:px-6 lg:px-10 pb-24 pt-4">
+<div class="sq-results">
+  <aside class="sq-side" aria-label="Search history">
+    <div class="sq-side-head">
+      <button type="button" class="btn btn-primary sq-side-new">New search</button>
+    </div>
+    <div class="sq-side-scroll [scrollbar-width:thin] [scrollbar-color:#8E96A8_transparent] [&::-webkit-scrollbar]:h-[8px] [&::-webkit-scrollbar]:w-[8px] [&::-webkit-scrollbar]:rounded-full [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-[#8E96A8] [&::-webkit-scrollbar-thumb:hover]:bg-[#6C7484]">
+      <div class="sq-run min-w-0" data-sel="true">
+        <button type="button" class="sq-run-head" aria-current="true">
+          <span class="sq-run-title">Backend engineer on Node/Postgres</span>
+          <span class="sq-run-meta">
+            <span class="sq-run-time">10:42 AM</span>
+            <span class="sq-run-badge">6</span>
+          </span>
+        </button>
+        <div class="sq-run-cands">
+          <button type="button" class="sq-cand" data-sel="true" aria-pressed="true">
+            <span class="sq-rank">1</span>
+            <span aria-hidden="true" class="grid place-items-center rounded-full bg-brand-soft text-brand-text font-semibold select-none" style="width:32px;height:32px;font-size:12px">AS</span>
+            <span class="sq-cand-body">
+              <span class="sq-cand-name">Asha Sharma</span>
+              <span class="sq-cand-sub">
+                <span class="sq-dot" data-level="strong" aria-hidden="true"></span>
+                <span class="sq-cand-lvl">Strong match · Available now</span>
+              </span>
+            </span>
+            <span class="sq-cand-side">
+              <span class="sq-cand-num">92</span>
+              <span class="sq-cand-bar"><i style="width:92%"></i></span>
+            </span>
+          </button>
+          <button type="button" class="sq-cand" aria-pressed="false">
+            <span class="sq-rank">2</span>
+            <span aria-hidden="true" class="grid place-items-center rounded-full bg-brand-soft text-brand-text font-semibold select-none" style="width:32px;height:32px;font-size:12px">RM</span>
+            <span class="sq-cand-body">
+              <span class="sq-cand-name">Rohan Mehta</span>
+              <span class="sq-cand-sub">
+                <span class="sq-dot" data-level="strong" aria-hidden="true"></span>
+                <span class="sq-cand-lvl">Strong match · On notice</span>
+              </span>
+            </span>
+            <span class="sq-cand-side">
+              <span class="sq-cand-num">86</span>
+              <span class="sq-cand-bar"><i style="width:86%"></i></span>
+            </span>
+          </button>
+          <button type="button" class="sq-cand" aria-pressed="false">
+            <span class="sq-rank">3</span>
+            <span aria-hidden="true" class="grid place-items-center rounded-full bg-brand-soft text-brand-text font-semibold select-none" style="width:32px;height:32px;font-size:12px">PN</span>
+            <span class="sq-cand-body">
+              <span class="sq-cand-name">Priya Nair</span>
+              <span class="sq-cand-sub">
+                <span class="sq-dot" data-level="strong" aria-hidden="true"></span>
+                <span class="sq-cand-lvl">Strong match · Available now</span>
+              </span>
+            </span>
+            <span class="sq-cand-side">
+              <span class="sq-cand-num">81</span>
+              <span class="sq-cand-bar"><i style="width:81%"></i></span>
+            </span>
+          </button>
+          <button type="button" class="sq-cand" aria-pressed="false">
+            <span class="sq-rank">4</span>
+            <span aria-hidden="true" class="grid place-items-center rounded-full bg-brand-soft text-brand-text font-semibold select-none" style="width:32px;height:32px;font-size:12px">VS</span>
+            <span class="sq-cand-body">
+              <span class="sq-cand-name">Vikram Singh</span>
+              <span class="sq-cand-sub">
+                <span class="sq-dot" data-level="partial" aria-hidden="true"></span>
+                <span class="sq-cand-lvl">Partial · Available now</span>
+              </span>
+            </span>
+            <span class="sq-cand-side">
+              <span class="sq-cand-num">74</span>
+              <span class="sq-cand-bar"><i style="width:74%"></i></span>
+            </span>
+          </button>
+          <button type="button" class="sq-cand" aria-pressed="false">
+            <span class="sq-rank">5</span>
+            <span aria-hidden="true" class="grid place-items-center rounded-full bg-brand-soft text-brand-text font-semibold select-none" style="width:32px;height:32px;font-size:12px">SK</span>
+            <span class="sq-cand-body">
+              <span class="sq-cand-name">Sneha Kulkarni</span>
+              <span class="sq-cand-sub">
+                <span class="sq-dot" data-level="partial" aria-hidden="true"></span>
+                <span class="sq-cand-lvl">Partial · On notice</span>
+              </span>
+            </span>
+            <span class="sq-cand-side">
+              <span class="sq-cand-num">66</span>
+              <span class="sq-cand-bar"><i style="width:66%"></i></span>
+            </span>
+          </button>
+          <button type="button" class="sq-cand" aria-pressed="false">
+            <span class="sq-rank">6</span>
+            <span aria-hidden="true" class="grid place-items-center rounded-full bg-brand-soft text-brand-text font-semibold select-none" style="width:32px;height:32px;font-size:12px">KP</span>
+            <span class="sq-cand-body">
+              <span class="sq-cand-name">Karan Patel</span>
+              <span class="sq-cand-sub">
+                <span class="sq-dot" data-level="weak" aria-hidden="true"></span>
+                <span class="sq-cand-lvl">Weak · Available now</span>
+              </span>
+            </span>
+            <span class="sq-cand-side">
+              <span class="sq-cand-num">46</span>
+              <span class="sq-cand-bar"><i style="width:46%"></i></span>
+            </span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <section class="sq-detail">
+    <header class="sq-results-head">
+      <div class="sq-head-text">
+        <span class="sq-overline">Shortlist</span>
+        <h2 class="sq-results-title">Backend engineer on Node/Postgres<span class="sq-count">6</span></h2>
+        <p class="sq-head-meta">Last run 10:42 AM · Deep read on</p>
+      </div>
+      <button type="button" class="btn btn-secondary btn-sm sq-head-new">New search</button>
+    </header>
+
+    <div class="sq-detail-body">
+      <div>
+        <div class="flex items-start gap-4">
+          <span aria-hidden="true" class="grid place-items-center rounded-full bg-brand-soft text-brand-text font-semibold select-none" style="width:56px;height:56px;font-size:20px">AS</span>
+          <div class="min-w-0 flex-1">
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+              <h2 class="text-[21px] font-semibold text-ink tracking-[-0.015em]">Asha Sharma</h2>
+              <span class="level-pill level-strong">Strong match</span>
+            </div>
+            <p class="text-[14.5px] text-body mt-1">Node/Postgres APIs, auth + caching, 2y</p>
+          </div>
+          <div class="flex-none text-right">
+            <div class="sq-score">92<span>/100</span></div>
+            <p class="sq-score-cap">Strong match</p>
+          </div>
+        </div>
+
+        <div class="mt-4">
+          <div class="trace-rule" aria-hidden="true">
+            <div class="trace-fill" style="background:#1F2DE6;width:92%"></div>
+          </div>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-2.5 mt-4">
+          <a href="talent.html" class="btn btn-primary btn-sm press">View page <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a>
+          <button type="button" class="btn btn-secondary btn-sm press"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2 2 0 0 1 2 2v15a1 1 0 0 1-1.496.868l-4.512-2.578a2 2 0 0 0-1.984 0l-4.512 2.578A1 1 0 0 1 5 20V5a2 2 0 0 1 2-2z"/></svg>Shortlist</button>
+          <a href="mailto:asha.backend@demo.local" class="tag hover:text-brand-text transition-colors"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m22 7-8.991 5.727a2 2 0 0 1-2.009 0L2 7"/><rect x="2" y="4" width="20" height="16" rx="2"/></svg>Email</a>
+          <a href="tel:+91 98765 00001" class="tag hover:text-brand-text transition-colors"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><line x1="8" x2="16" y1="12" y2="12"/></svg>+91 98765 00001</a>
+          <a href="https://linkedin.com/in/demo-asha.backend" class="tag hover:text-brand-text transition-colors" target="_blank" rel="noopener noreferrer"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>LinkedIn</a>
+          <a href="https://github.com/demo-asha.backend" class="tag hover:text-brand-text transition-colors" target="_blank" rel="noopener noreferrer"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>GitHub</a>
+        </div>
+
+        <section class="mt-6 pt-5 border-t border-line">
+          <p class="sq-overline">AI analysis - the answers <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z"/><path d="M20 2v4"/><path d="M22 4h-4"/><circle cx="4" cy="20" r="2"/></svg></p>
+          <div class="grid gap-2.5 mt-3">
+            <div class="sq-qa">
+              <div class="sq-qa-head">
+                <span class="sq-qa-num" aria-hidden="true">01</span>
+                <p class="sq-qa-q">Which parts of their experience match our requirement?</p>
+              </div>
+              <div class="sq-qa-a">Deep read matched them on Node.js service boundaries, PostgreSQL schema ownership and p95 latency under load against the brief. Skills overlap 95% · semantic match 93% lead the sub-scores; core stack covers Node.js, PostgreSQL and Redis.</div>
+            </div>
+            <div class="sq-qa">
+              <div class="sq-qa-head">
+                <span class="sq-qa-num" aria-hidden="true">02</span>
+                <p class="sq-qa-q">What have they built that maps to this role?</p>
+              </div>
+              <div class="sq-qa-a">Deep read strengths: owns service boundaries end to end, keeps p95 honest under load and cut p95 from 800ms to 250ms with Redis caching. Closest project evidence: delivery tracker backend holding 500 concurrent connections. Depth of work scores 82% on this profile. Ships with Node.js, PostgreSQL and Redis.</div>
+            </div>
+            <div class="sq-qa">
+              <div class="sq-qa-head">
+                <span class="sq-qa-num" aria-hidden="true">03</span>
+                <p class="sq-qa-q">Where do they fall short of our requirement?</p>
+              </div>
+              <div class="sq-qa-a">Missing requirements: production Kubernetes ownership. Deep read gaps: no ownership of a service beyond the API layer.</div>
+            </div>
+            <div class="sq-qa">
+              <div class="sq-qa-head">
+                <span class="sq-qa-num" aria-hidden="true">04</span>
+                <p class="sq-qa-q">Should we move them forward?</p>
+              </div>
+              <div class="sq-qa-a">Move them forward - 92/100, a strong match, led by skills overlap 95% · semantic match 93%.</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="mt-6 pt-5 border-t border-line">
+          <p class="sq-overline">Details</p>
+          <div class="mt-3 grid gap-6">
+            <div>
+              <h3 class="flex items-center gap-2 text-[13.5px] font-semibold text-ink tracking-[-0.01em]"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/></svg>Profile facts</h3>
+              <dl class="mt-2.5 grid gap-x-10 lg:grid-cols-2 sq-facts">
+                <div class="sq-detail-row"><dt>Name</dt><dd>Asha Sharma</dd></div>
+                <div class="sq-detail-row"><dt>Headline</dt><dd>Node/Postgres APIs, auth + caching, 2y</dd></div>
+                <div class="sq-detail-row"><dt>Domain</dt><dd>backend</dd></div>
+                <div class="sq-detail-row"><dt>Experience (years)</dt><dd>2</dd></div>
+                <div class="sq-detail-row"><dt>Location</dt><dd>Pune</dd></div>
+                <div class="sq-detail-row"><dt>Work mode</dt><dd>remote_only</dd></div>
+                <div class="sq-detail-row"><dt>Availability</dt><dd>immediate</dd></div>
+                <div class="sq-detail-row"><dt>Minimum salary</dt><dd>45,000</dd></div>
+                <div class="sq-detail-row"><dt>Salary frequency</dt><dd>monthly</dd></div>
+                <div class="sq-detail-row"><dt>Email</dt><dd><a href="mailto:asha.backend@demo.local" class="underline decoration-muted underline-offset-2 transition-colors hover:text-brand-text break-all">asha.backend@demo.local</a></dd></div>
+                <div class="sq-detail-row"><dt>Phone</dt><dd><a href="tel:+91 98765 00001" class="underline decoration-muted underline-offset-2 transition-colors hover:text-brand-text break-all">+91 98765 00001</a></dd></div>
+                <div class="sq-detail-row"><dt>LinkedIn</dt><dd><a href="https://linkedin.com/in/demo-asha.backend" class="underline decoration-muted underline-offset-2 transition-colors hover:text-brand-text break-all" target="_blank" rel="noopener noreferrer">https://linkedin.com/in/demo-asha.backend</a></dd></div>
+                <div class="sq-detail-row"><dt>GitHub</dt><dd><a href="https://github.com/demo-asha.backend" class="underline decoration-muted underline-offset-2 transition-colors hover:text-brand-text break-all" target="_blank" rel="noopener noreferrer">https://github.com/demo-asha.backend</a></dd></div>
+              </dl>
+            </div>
+
+            <div>
+              <h3 class="flex items-center gap-2 text-[13.5px] font-semibold text-ink tracking-[-0.01em]"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><rect width="20" height="14" x="2" y="6" rx="2"/></svg>Work experience</h3>
+              <div class="mt-2 grid">
+                <div class="border-b border-line py-4 first:pt-0 last:border-b-0 last:pb-0">
+                  <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                    <p class="text-[14.5px] font-semibold text-ink tracking-[-0.01em]">SDE-1</p>
+                    <p class="font-mono text-[12.5px] text-muted">Jun 2024 – Present</p>
+                  </div>
+                  <p class="mt-0.5 text-[13.5px] text-body">Acme</p>
+                  <p class="mt-2 text-[13.5px] leading-[1.65] text-body whitespace-pre-line"><span class="font-semibold text-ink">Description - </span>Own the delivery tracking API on Node.js and PostgreSQL - schema design, service boundaries, and on-call for the p95 budget.</p>
+                  <p class="mt-2 text-[13.5px] leading-[1.65] text-body whitespace-pre-line"><span class="font-semibold text-ink">Achievements - </span>Cut p95 latency from 800ms to 250ms by adding Redis caching in front of the route handlers.</p>
+                  <div class="mt-3 flex flex-wrap gap-2">
+                    <span class="tag">Node.js</span>
+                    <span class="tag">PostgreSQL</span>
+                    <span class="tag">Redis</span>
+                  </div>
+                </div>
+                <div class="border-b border-line py-4 first:pt-0 last:border-b-0 last:pb-0">
+                  <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                    <p class="text-[14.5px] font-semibold text-ink tracking-[-0.01em]">Software Engineering Intern</p>
+                    <p class="font-mono text-[12.5px] text-muted">Aug 2023 – May 2024</p>
+                  </div>
+                  <p class="mt-0.5 text-[13.5px] text-body">Acme</p>
+                  <p class="mt-2 text-[13.5px] leading-[1.65] text-body whitespace-pre-line"><span class="font-semibold text-ink">Description - </span>Shipped internal tooling for the operations team - REST endpoints, auth flows, and a small React admin view.</p>
+                  <div class="mt-3 flex flex-wrap gap-2">
+                    <span class="tag">Node.js</span>
+                    <span class="tag">Express</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <h3 class="flex items-center gap-2 text-[13.5px] font-semibold text-ink tracking-[-0.01em]"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 19a5 5 0 0 1-5-5v8"/><path d="M9 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v5"/><circle cx="13" cy="12" r="2"/><circle cx="20" cy="19" r="2"/></svg>Projects</h3>
+              <div class="mt-2 grid">
+                <div class="border-b border-line py-4 first:pt-0 last:border-b-0 last:pb-0">
+                  <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                    <p class="text-[14.5px] font-semibold text-ink tracking-[-0.01em]">Delivery tracker</p>
+                    <p class="font-mono text-[12.5px] text-muted">Realtime backend</p>
+                  </div>
+                  <p class="mt-1 text-[13.5px] text-body"><span class="font-semibold text-ink">Role - </span>Sole backend</p>
+                  <p class="mt-2 text-[13.5px] leading-[1.65] text-body whitespace-pre-line"><span class="font-semibold text-ink">Problem - </span>Operations had no live view of fleet position - updates only landed in nightly batches.</p>
+                  <p class="mt-2 text-[13.5px] leading-[1.65] text-body whitespace-pre-line"><span class="font-semibold text-ink">Description - </span>Realtime tracking service on Socket.io with Redis pub/sub, holding 500 concurrent connections.</p>
+                  <p class="mt-2 text-[13.5px] leading-[1.65] text-body whitespace-pre-line"><span class="font-semibold text-ink">Impact - </span>Route dashboards went from nightly to live; stale-tracking support tickets dropped off.</p>
+                  <div class="mt-3 flex flex-wrap gap-2">
+                    <span class="tag">Node.js</span>
+                    <span class="tag">Socket.io</span>
+                    <span class="tag">Redis</span>
+                  </div>
+                  <div class="mt-2.5 flex flex-wrap gap-x-4 gap-y-1.5 text-[12.5px]">
+                    <a href="https://github.com/demo-asha.backend/delivery-tracker" class="underline decoration-muted underline-offset-2 transition-colors hover:text-brand-text break-all" target="_blank" rel="noopener noreferrer">https://github.com/demo-asha.backend/delivery-tracker</a>
+                  </div>
+                </div>
+                <div class="border-b border-line py-4 first:pt-0 last:border-b-0 last:pb-0">
+                  <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                    <p class="text-[14.5px] font-semibold text-ink tracking-[-0.01em]">Auth &amp; session service</p>
+                    <p class="font-mono text-[12.5px] text-muted">API</p>
+                  </div>
+                  <p class="mt-1 text-[13.5px] text-body"><span class="font-semibold text-ink">Role - </span>Owner</p>
+                  <p class="mt-2 text-[13.5px] leading-[1.65] text-body whitespace-pre-line"><span class="font-semibold text-ink">Description - </span>Cookie sessions, role checks, and rate limiting in front of every internal service.</p>
+                  <p class="mt-2 text-[13.5px] leading-[1.65] text-body whitespace-pre-line"><span class="font-semibold text-ink">Impact - </span>Three teams dropped their copy-pasted auth middleware and moved onto it.</p>
+                  <div class="mt-3 flex flex-wrap gap-2">
+                    <span class="tag">Node.js</span>
+                    <span class="tag">PostgreSQL</span>
+                    <span class="tag">Redis</span>
+                  </div>
+                  <div class="mt-2.5 flex flex-wrap gap-x-4 gap-y-1.5 text-[12.5px]">
+                    <a href="https://github.com/demo-asha.backend/auth-session" class="underline decoration-muted underline-offset-2 transition-colors hover:text-brand-text break-all" target="_blank" rel="noopener noreferrer">https://github.com/demo-asha.backend/auth-session</a>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <h3 class="flex items-center gap-2 text-[13.5px] font-semibold text-ink tracking-[-0.01em]"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z"/><path d="M22 10v6"/><path d="M6 12.5V16a6 3 0 0 0 12 0v-3.5"/></svg>Education</h3>
+              <div class="mt-2 grid">
+                <div class="border-b border-line py-4 first:pt-0 last:border-b-0 last:pb-0">
+                  <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                    <p class="text-[14.5px] font-semibold text-ink tracking-[-0.01em]">Savitribai Phule Pune University</p>
+                    <p class="font-mono text-[12.5px] text-muted">2020 – 2024</p>
+                  </div>
+                  <p class="mt-0.5 text-[13.5px] text-body">B.E., Computer Engineering</p>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <h3 class="flex items-center gap-2 text-[13.5px] font-semibold text-ink tracking-[-0.01em]"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" x2="6" y1="9" y2="21"/></svg>Open source</h3>
+              <div class="mt-2 grid">
+                <div class="border-b border-line py-4 first:pt-0 last:border-b-0 last:pb-0">
+                  <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                    <p class="text-[14.5px] font-semibold text-ink tracking-[-0.01em] font-mono">express-redis-rate-limit</p>
+                    <p class="font-mono text-[12.5px] text-muted">Contributor</p>
+                  </div>
+                  <p class="mt-2 text-[13.5px] leading-[1.65] text-body whitespace-pre-line"><span class="font-semibold text-ink">Description - </span>Added burst-window handling for multi-instance deployments.</p>
+                  <div class="mt-3 flex flex-wrap gap-2">
+                    <span class="tag">Node.js</span>
+                    <span class="tag">Redis</span>
+                  </div>
+                  <div class="mt-2.5 flex flex-wrap gap-x-4 gap-y-1.5 text-[12.5px]">
+                    <a href="https://github.com/demo-asha.backend/express-redis-rate-limit" class="underline decoration-muted underline-offset-2 transition-colors hover:text-brand-text break-all" target="_blank" rel="noopener noreferrer">https://github.com/demo-asha.backend/express-redis-rate-limit</a>
+                    <a href="https://github.com/express-rate-limit/express-rate-limit/pull/412" class="underline decoration-muted underline-offset-2 transition-colors hover:text-brand-text break-all" target="_blank" rel="noopener noreferrer">https://github.com/express-rate-limit/express-rate-limit/pull/412</a>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <h3 class="flex items-center gap-2 text-[13.5px] font-semibold text-ink tracking-[-0.01em]"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.172 2a2 2 0 0 1 1.414.586l6.71 6.71a2.4 2.4 0 0 1 0 3.408l-4.592 4.592a2.4 2.4 0 0 1-3.408 0l-6.71-6.71A2 2 0 0 1 6 9.172V3a1 1 0 0 1 1-1z"/><path d="M2 7v6.172a2 2 0 0 0 .586 1.414l6.71 6.71a2.4 2.4 0 0 0 3.191.193"/><circle cx="10.5" cy="6.5" r=".5" fill="currentColor"/></svg>Skills</h3>
+              <div class="mt-2.5 flex flex-wrap gap-2">
+                <span class="tag">Node.js</span>
+                <span class="tag">PostgreSQL</span>
+                <span class="tag">Redis</span>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+</div>
+</div>
+
+</main>
+</div>
+</body>
+</html>

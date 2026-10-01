@@ -1,6 +1,7 @@
+import { randomUUID } from "crypto";
 import { z } from "zod";
 import { inngest } from "@/lib/inngest";
-import { supabaseAdmin } from "@/lib/supabase";
+import { AppDoc, col, Collections } from "@/lib/mongo";
 import { candidateSchema, normalizeEmail } from "@/lib/validators";
 import { revealedCandidateIds, lockContacts } from "@/lib/contact-prefs";
 import { normalizeSkills } from "@/lib/skills";
@@ -12,7 +13,13 @@ import {
   guardOwnerAuth,
   verifyEmailChangeToken,
 } from "@/lib/api-auth";
-import { requireHrDb, requireOwnerDb, userDb, getSessionUser } from "@/lib/supabase-user";
+import { deleteObject } from "@/lib/storage";
+import {
+  requireHrDb,
+  requireOwnerDb,
+  userDb,
+  getSessionUser,
+} from "@/lib/auth-user";
 
 const uuid = z.string().uuid("Must be a valid UUID");
 
@@ -43,10 +50,15 @@ const JSON_LIMITS: Record<string, number> = {
   "candidates-delete": 256 * 1024,
 };
 
-function isMissingColumnErr(err: { message?: string; code?: string } | null | undefined): boolean {
-  if (!err) return false;
-  if (err.code === "PGRST204") return true;
-  return /could not find the|column .* does not exist/i.test(err.message ?? "");
+function isMissingColumnErr(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { message?: string; code?: unknown };
+  if (e.code === "PGRST204") return true;
+  return /could not find the|column .* does not exist/i.test(e.message ?? "");
+}
+
+function isDuplicateKey(e: unknown): boolean {
+  return typeof e === "object" && e !== null && (e as { code?: unknown }).code === 11000;
 }
 
 function stripShowFlags(obj: Record<string, unknown>): Record<string, unknown> {
@@ -87,6 +99,76 @@ function honeypotTripped(raw: unknown): boolean {
   return false;
 }
 
+/**
+ * Mongo throws where Supabase returned `{ error }`. The old GET ignored
+ * child-read errors (`data` came back null → empty lists), so keep that
+ * contract: log, fall back, never fail the response.
+ */
+async function safeRead<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    console.error(
+      "[candidates] read failed",
+      redactPii((e as Error)?.message ?? String(e)).slice(0, 200),
+    );
+    return fallback;
+  }
+}
+
+/**
+ * Postgres ON DELETE CASCADE for candidates(id) — Mongo needs it manual.
+ * Children first so a failed cascade leaves the candidate row in place
+ * (retryable), then the candidate itself.
+ */
+async function cascadeDeleteCandidate(candidateId: string): Promise<void> {
+  const [
+    candidates,
+    profiles,
+    workExperiences,
+    projects,
+    education,
+    candidateSkills,
+    profileChunks,
+    oss,
+    depths,
+    matches,
+    shortlists,
+    contactLog,
+  ] = await Promise.all([
+    col<AppDoc>(Collections.candidates),
+    col<AppDoc>(Collections.candidateProfiles),
+    col<AppDoc>(Collections.workExperiences),
+    col<AppDoc>(Collections.projects),
+    col<AppDoc>(Collections.education),
+    col<AppDoc>(Collections.candidateSkills),
+    col<AppDoc>(Collections.profileChunks),
+    col<AppDoc>(Collections.openSourceContributions),
+    col<AppDoc>(Collections.projectDepthAnalysis),
+    col<AppDoc>(Collections.candidateMatches),
+    col<AppDoc>(Collections.shortlists),
+    col<AppDoc>(Collections.contactLog),
+  ]);
+  const projIds = (
+    await projects.find({ candidate_id: candidateId }, { projection: { _id: 1 } }).toArray()
+  ).map((p) => p._id);
+
+  await Promise.all([
+    profiles.deleteMany({ candidate_id: candidateId }),
+    workExperiences.deleteMany({ candidate_id: candidateId }),
+    projects.deleteMany({ candidate_id: candidateId }),
+    education.deleteMany({ candidate_id: candidateId }),
+    candidateSkills.deleteMany({ candidate_id: candidateId }),
+    profileChunks.deleteMany({ candidate_id: candidateId }),
+    oss.deleteMany({ candidate_id: candidateId }),
+    matches.deleteMany({ candidate_id: candidateId }),
+    shortlists.deleteMany({ candidate_id: candidateId }),
+    contactLog.deleteMany({ candidate_id: candidateId }),
+    ...(projIds.length ? [depths.deleteMany({ project_id: { $in: projIds } })] : []),
+  ]);
+  await candidates.deleteOne({ _id: candidateId });
+}
+
 export async function GET(request: Request) {
   const rl = rateLimit(request, { key: "candidates-get", limit: 120, windowMs: 60_000 });
   if (!rl.ok) return rateLimitResponse(rl.retryAfterMs);
@@ -100,12 +182,15 @@ export async function GET(request: Request) {
   if (!uuid.safeParse(id).success) {
     return Response.json({ error: "id must be a valid UUID" }, { status: 400 });
   }
-  const db = supabaseAdmin();
 
-  const { data } = await db.from("candidates").select("*").eq("id", id).maybeSingle();
-  const candidate = (data as Record<string, unknown> | null) ?? null;
-  if (!candidate) return Response.json({ error: "candidate not found" }, { status: 404 });
-  const cid = candidate.id as string;
+  const raw = await safeRead(
+    async () => (await col<AppDoc>(Collections.candidates)).findOne({ _id: id }),
+    null,
+  );
+  if (!raw) return Response.json({ error: "candidate not found" }, { status: 404 });
+  const { _id, ...candidateRest } = raw;
+  const candidate: Record<string, unknown> = { ...candidateRest, id: _id };
+  const cid = _id;
 
   let isOwnerVerified = false;
   if (viewer.kind === "owner" && viewer.id === cid) {
@@ -137,7 +222,7 @@ export async function GET(request: Request) {
     effective = nullPublicContact({ ...candidate, user_id: null, consent_status: null });
   }
   if (isHrVerified && !isOwnerVerified && hrEmployerId) {
-    const revealed = await revealedCandidateIds(db, hrEmployerId);
+    const revealed = await revealedCandidateIds(hrEmployerId);
     if (!revealed.has(cid)) {
       effective = lockContacts(effective);
     }
@@ -146,73 +231,324 @@ export async function GET(request: Request) {
 
   let ownSearchIds: string[] | null = null;
   if (privilegedLogs && !isOwnerVerified && hrEmployerId) {
-    try {
-      const { data: ownSearches } = await db.from("searches").select("id").eq("employer_id", hrEmployerId).limit(2000);
-      ownSearchIds = ((ownSearches ?? []) as { id: string }[]).map((s) => s.id);
-    } catch {
-      ownSearchIds = [];
+    const ownSearches = await safeRead(
+      async () =>
+        (
+          await (
+            await col<AppDoc>(Collections.searches)
+          ).find({ employer_id: hrEmployerId }, { projection: { _id: 1 } })
+            .limit(2000)
+            .toArray()
+        ),
+      [],
+    );
+    ownSearchIds = ownSearches.map((s) => s._id);
+  }
+
+  const contactLogQuery = async (): Promise<Record<string, unknown>[]> => {
+    const filter: Record<string, unknown> = { candidate_id: cid };
+    if (!isOwnerVerified && hrEmployerId) filter.employer_id = hrEmployerId;
+    const rows = await (
+      await col<AppDoc>(Collections.contactLog)
+    )
+      .find(filter, {
+        projection: { channel: 1, message: 1, job_id: 1, employer_id: 1, created_at: 1 },
+      })
+      .sort({ created_at: -1 })
+      .limit(50)
+      .toArray();
+    return rows.map((r) => ({
+      id: r._id,
+      channel: r.channel ?? null,
+      message: r.message ?? null,
+      job_id: r.job_id ?? null,
+      employer_id: r.employer_id ?? null,
+      created_at: r.created_at ?? null,
+    }));
+  };
+  const matchesQuery = async (): Promise<Record<string, unknown>[]> => {
+    const filter: Record<string, unknown> = { candidate_id: cid };
+    if (!isOwnerVerified && ownSearchIds) {
+      filter.search_id = {
+        $in: ownSearchIds.length
+          ? ownSearchIds
+          : ["00000000-0000-0000-0000-000000000000"],
+      };
     }
-  }
+    const rows = await (
+      await col<AppDoc>(Collections.candidateMatches)
+    )
+      .find(filter, { projection: { search_id: 1, job_id: 1, score: 1, status: 1, created_at: 1 } })
+      .sort({ created_at: -1 })
+      .limit(50)
+      .toArray();
+    return rows.map((r) => ({
+      id: r._id,
+      search_id: r.search_id ?? null,
+      job_id: r.job_id ?? null,
+      score: r.score ?? null,
+      status: r.status ?? null,
+      created_at: r.created_at ?? null,
+    }));
+  };
+  const shortlistsQuery = async (): Promise<Record<string, unknown>[]> => {
+    const filter: Record<string, unknown> = { candidate_id: cid };
+    if (!isOwnerVerified && hrEmployerId) filter.employer_id = hrEmployerId;
+    const rows = await (
+      await col<AppDoc>(Collections.shortlists)
+    )
+      .find(filter, { projection: { job_id: 1, status: 1, notes: 1, created_at: 1 } })
+      .sort({ created_at: -1 })
+      .limit(50)
+      .toArray();
+    return rows.map((r) => ({
+      id: r._id,
+      job_id: r.job_id ?? null,
+      status: r.status ?? null,
+      notes: r.notes ?? null,
+      created_at: r.created_at ?? null,
+    }));
+  };
 
-  const contactLogQuery = () => {
-    let q = db.from("contact_log").select("id, channel, message, job_id, employer_id, created_at").eq("candidate_id", cid).order("created_at", { ascending: false }).limit(50);
-    if (!isOwnerVerified && hrEmployerId) q = q.eq("employer_id", hrEmployerId);
-    return q;
-  };
-  const matchesQuery = () => {
-    let q = db.from("candidate_matches").select("id, search_id, job_id, score, status, created_at").eq("candidate_id", cid).order("created_at", { ascending: false }).limit(50);
-    if (!isOwnerVerified && ownSearchIds) q = q.in("search_id", ownSearchIds.length ? ownSearchIds : ["00000000-0000-0000-0000-000000000000"]);
-    return q;
-  };
-  const shortlistsQuery = () => {
-    let q = db.from("shortlists").select("id, job_id, status, notes, created_at").eq("candidate_id", cid).order("created_at", { ascending: false }).limit(50);
-    if (!isOwnerVerified && hrEmployerId) q = q.eq("employer_id", hrEmployerId);
-    return q;
-  };
-  const [{ data: profile }, { data: views }, { data: matches }, { data: shortlisted }, { data: projects }, { data: experiences }, { data: education }, { data: skillRows }] = await Promise.all([
-    db.from("candidate_profiles").select("summary_markdown, summary_json, updated_at").eq("candidate_id", cid).maybeSingle(),
-    privilegedLogs ? contactLogQuery() : Promise.resolve({ data: [] }),
-    privilegedLogs ? matchesQuery() : Promise.resolve({ data: [] }),
-    privilegedLogs ? shortlistsQuery() : Promise.resolve({ data: [] }),
-    db.from("projects").select("id, title, description, problem_statement, tech_stack, role_in_project, project_link, repo_link, deployment_link, impact_summary, project_type").eq("candidate_id", cid),
-    db.from("work_experiences").select("company_name, job_title, start_date, end_date, is_current, description, achievements, tech_stack").eq("candidate_id", cid),
-    db.from("education").select("institution, degree, field_of_study, start_year, end_year, achievements").eq("candidate_id", cid),
-    db.from("candidate_skills").select("experience_years, proficiency_level, source, skills(name)").eq("candidate_id", cid),
-  ]);
+  const profileP = safeRead<Record<string, unknown> | null>(async () => {
+    const r = await (
+      await col<AppDoc>(Collections.candidateProfiles)
+    ).findOne(
+      { candidate_id: cid },
+      { projection: { summary_markdown: 1, summary_json: 1, updated_at: 1, _id: 0 } },
+    );
+    if (!r) return null;
+    return {
+      summary_markdown: r.summary_markdown ?? null,
+      summary_json: r.summary_json ?? {},
+      updated_at: r.updated_at ?? null,
+    };
+  }, null);
+  const viewsP = privilegedLogs
+    ? safeRead(contactLogQuery, [] as Record<string, unknown>[])
+    : Promise.resolve([] as Record<string, unknown>[]);
+  const matchesP = privilegedLogs
+    ? safeRead(matchesQuery, [] as Record<string, unknown>[])
+    : Promise.resolve([] as Record<string, unknown>[]);
+  const shortlistedP = privilegedLogs
+    ? safeRead(shortlistsQuery, [] as Record<string, unknown>[])
+    : Promise.resolve([] as Record<string, unknown>[]);
+  const projectsP = safeRead<Record<string, unknown>[]>(async () => {
+    const rows = await (
+      await col<AppDoc>(Collections.projects)
+    )
+      .find(
+        { candidate_id: cid },
+        {
+          projection: {
+            title: 1,
+            description: 1,
+            problem_statement: 1,
+            tech_stack: 1,
+            role_in_project: 1,
+            project_link: 1,
+            repo_link: 1,
+            deployment_link: 1,
+            impact_summary: 1,
+            project_type: 1,
+          },
+        },
+      )
+      .toArray();
+    return rows.map((r) => ({
+      id: r._id,
+      title: r.title ?? null,
+      description: r.description ?? null,
+      problem_statement: r.problem_statement ?? null,
+      tech_stack: r.tech_stack ?? [],
+      role_in_project: r.role_in_project ?? null,
+      project_link: r.project_link ?? null,
+      repo_link: r.repo_link ?? null,
+      deployment_link: r.deployment_link ?? null,
+      impact_summary: r.impact_summary ?? null,
+      project_type: r.project_type ?? null,
+    }));
+  }, []);
+  const experiencesP = safeRead<Record<string, unknown>[]>(async () => {
+    const rows = await (
+      await col<AppDoc>(Collections.workExperiences)
+    )
+      .find(
+        { candidate_id: cid },
+        {
+          projection: {
+            company_name: 1,
+            job_title: 1,
+            start_date: 1,
+            end_date: 1,
+            is_current: 1,
+            description: 1,
+            achievements: 1,
+            tech_stack: 1,
+            _id: 0,
+          },
+        },
+      )
+      .toArray();
+    return rows.map((r) => ({
+      company_name: r.company_name ?? null,
+      job_title: r.job_title ?? null,
+      start_date: r.start_date ?? null,
+      end_date: r.end_date ?? null,
+      is_current: r.is_current ?? false,
+      description: r.description ?? null,
+      achievements: r.achievements ?? null,
+      tech_stack: r.tech_stack ?? [],
+    }));
+  }, []);
+  const educationP = safeRead<Record<string, unknown>[]>(async () => {
+    const rows = await (
+      await col<AppDoc>(Collections.education)
+    )
+      .find(
+        { candidate_id: cid },
+        {
+          projection: {
+            institution: 1,
+            degree: 1,
+            field_of_study: 1,
+            start_year: 1,
+            end_year: 1,
+            achievements: 1,
+            _id: 0,
+          },
+        },
+      )
+      .toArray();
+    return rows.map((r) => ({
+      institution: r.institution ?? null,
+      degree: r.degree ?? null,
+      field_of_study: r.field_of_study ?? null,
+      start_year: r.start_year ?? null,
+      end_year: r.end_year ?? null,
+      achievements: r.achievements ?? null,
+    }));
+  }, []);
+  const skillRowsP = safeRead<Record<string, unknown>[]>(async () => {
+    const linkRows = await (
+      await col<AppDoc>(Collections.candidateSkills)
+    )
+      .find(
+        { candidate_id: cid },
+        {
+          projection: {
+            skill_id: 1,
+            experience_years: 1,
+            proficiency_level: 1,
+            source: 1,
+            _id: 0,
+          },
+        },
+      )
+      .toArray();
+    const skillIds = [
+      ...new Set(linkRows.map((r) => String(r.skill_id ?? "")).filter(Boolean)),
+    ];
+    const skillDocs = skillIds.length
+      ? await (
+          await col<AppDoc>(Collections.skills)
+        )
+          .find({ _id: { $in: skillIds } }, { projection: { name: 1 } })
+          .toArray()
+      : [];
+    const nameById = new Map(skillDocs.map((s) => [s._id, String(s.name ?? "")]));
+    return linkRows.map((r) => ({
+      experience_years: r.experience_years ?? null,
+      proficiency_level: r.proficiency_level ?? null,
+      source: r.source ?? null,
+      skills: { name: nameById.get(String(r.skill_id)) ?? null },
+    }));
+  }, []);
+  const ossP = safeRead<Record<string, unknown>[]>(async () => {
+    const rows = await (
+      await col<AppDoc>(Collections.openSourceContributions)
+    )
+      .find(
+        { candidate_id: cid },
+        {
+          projection: {
+            repo_name: 1,
+            repo_url: 1,
+            description: 1,
+            pr_links: 1,
+            tech_stack: 1,
+            role: 1,
+          },
+        },
+      )
+      .toArray();
+    return rows.map((r) => ({
+      id: r._id,
+      repo_name: r.repo_name ?? null,
+      repo_url: r.repo_url ?? null,
+      description: r.description ?? null,
+      pr_links: r.pr_links ?? [],
+      tech_stack: r.tech_stack ?? [],
+      role: r.role ?? null,
+    }));
+  }, []);
 
-  let oss: Record<string, unknown>[] = [];
-  try {
-    const { data, error } = await db
-      .from("open_source_contributions")
-      .select("id, repo_name, repo_url, description, pr_links, tech_stack, role")
-      .eq("candidate_id", cid);
-    if (!error && data) oss = data as Record<string, unknown>[];
-  } catch {
-    oss = [];
-  }
+  const [profile, views, matches, shortlisted, projects, experiences, education, skillRows, oss] =
+    await Promise.all([
+      profileP,
+      viewsP,
+      matchesP,
+      shortlistedP,
+      projectsP,
+      experiencesP,
+      educationP,
+      skillRowsP,
+      ossP,
+    ]);
 
   const depths: Record<string, Record<string, unknown>> = {};
-  const projIds = ((projects ?? []) as { id: string }[]).map((p) => p.id).filter(Boolean);
+  const projIds = projects.map((p) => String(p.id ?? "")).filter(Boolean);
   if (projIds.length) {
-    const { data: depthRows } = await db
-      .from("project_depth_analysis")
-      .select("project_id, complexity_score, technical_complexity, architectural_concepts, autonomy_level, evidence_quality, estimated_seniority_signal, business_impact, project_maturity")
-      .in("project_id", projIds);
-    for (const d of ((depthRows ?? []) as Record<string, unknown>[])) {
+    const depthRows = await safeRead(
+      async () =>
+        (
+          await col<AppDoc>(Collections.projectDepthAnalysis)
+        )
+          .find(
+            { project_id: { $in: projIds } },
+            {
+              projection: {
+                project_id: 1,
+                complexity_score: 1,
+                technical_complexity: 1,
+                architectural_concepts: 1,
+                autonomy_level: 1,
+                evidence_quality: 1,
+                estimated_seniority_signal: 1,
+                business_impact: 1,
+                project_maturity: 1,
+                _id: 0,
+              },
+            },
+          )
+          .toArray(),
+      [] as Record<string, unknown>[],
+    );
+    for (const d of depthRows) {
       depths[String(d.project_id)] = d;
     }
   }
 
   const bundled = bundleForViewer(privilegedLogs ? viewer : { kind: "anon" }, effective, {
     profile: profile ?? null,
-    contact_log: views ?? [],
-    matches: matches ?? [],
-    shortlists: shortlisted ?? [],
-    projects: projects ?? [],
+    contact_log: views,
+    matches,
+    shortlists: shortlisted,
+    projects,
     oss,
-    experiences: experiences ?? [],
-    education: education ?? [],
-    skills: skillRows ?? [],
+    experiences,
+    education,
+    skills: skillRows,
     depths,
   });
   if (isOwnerVerified) {
@@ -272,24 +608,26 @@ function sameRows(a: unknown[], b: unknown[]): boolean {
 }
 
 async function restoreRows(
-  db: ReturnType<typeof supabaseAdmin>,
   table: string,
   candidateId: string,
   prev: unknown[],
   label: string,
 ): Promise<void> {
   try {
-    const rows = (prev as Record<string, unknown>[]).map((r) => ({ candidate_id: candidateId, ...r }));
+    const rows = (prev as Record<string, unknown>[]).map((r) => ({
+      _id: randomUUID(),
+      candidate_id: candidateId,
+      ...r,
+    }));
     if (!rows.length) return;
-    const { error } = await db.from(table).insert(rows);
-    if (error) throw error;
+    const c = await col<AppDoc>(table);
+    await c.insertMany(rows);
   } catch (e) {
     console.error(`[candidates] ${label} restore failed`, redactPii((e as Error)?.message ?? String(e)).slice(0, 200));
   }
 }
 
 async function skillIdMap(
-  db: ReturnType<typeof supabaseAdmin>,
   names: unknown,
 ): Promise<{ canon: string[]; byName: Map<string, string>; ok: boolean }> {
   const raw = Array.isArray(names) ? names : [];
@@ -301,18 +639,33 @@ async function skillIdMap(
   );
   const byName = new Map<string, string>();
   if (!canon.length) return { canon, byName, ok: true };
+  const skills = await col<AppDoc>(Collections.skills);
   try {
-    await db.from("skills").upsert(
-      canon.map((name) => ({ name })),
-      { onConflict: "name", ignoreDuplicates: true },
+    // onConflict "name" + ignoreDuplicates → insert-if-absent per name.
+    await skills.bulkWrite(
+      canon.map((name) => ({
+        updateOne: {
+          filter: { name },
+          update: {
+            $setOnInsert: {
+              _id: randomUUID(),
+              name,
+              aliases: [],
+              created_at: new Date(),
+            },
+          },
+          upsert: true,
+        },
+      })),
     );
   } catch {
   }
   try {
-    const { data, error } = await db.from("skills").select("id, name").in("name", canon);
-    if (error) throw error;
-    for (const s of ((data ?? []) as { id: string; name: string }[])) {
-      byName.set(s.name.toLowerCase(), s.id);
+    const data = await skills
+      .find({ name: { $in: canon } }, { projection: { _id: 1, name: 1 } })
+      .toArray();
+    for (const s of data) {
+      byName.set(String(s.name).toLowerCase(), s._id);
     }
   } catch {
     return { canon, byName, ok: false };
@@ -340,25 +693,23 @@ export async function POST(request: Request) {
   if (!parsed.success) {
     return Response.json({ errors: parsed.error.flatten() }, { status: 400 });
   }
-  const db = supabaseAdmin();
   const c = parsed.data;
   const email = normalizeEmail(c.email);
+  const candidates = await col<AppDoc>(Collections.candidates);
 
   try {
-    const windowStart = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const { data: recent } = await db
-      .from("candidates")
-      .select("id, created_at")
-      .eq("contact_email", email)
-      .gt("created_at", windowStart)
-      .order("created_at", { ascending: false })
-      .limit(5);
-    const rows = (recent ?? []) as { id: string; created_at: string }[];
+    const windowStart = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const recent = await candidates
+      .find({ contact_email: email, created_at: { $gt: windowStart } }, { projection: { _id: 1, created_at: 1 } })
+      .sort({ created_at: -1 })
+      .limit(5)
+      .toArray();
+    const rows = recent.map((r) => ({ id: r._id, created_at: r.created_at }));
     if (rows.length >= 3) {
       return Response.json({ error: "Too many submissions for this email. Try again later." }, { status: 429 });
     }
     const newest = rows[0];
-    if (newest && Date.now() - new Date(newest.created_at).getTime() < 10 * 60 * 1000) {
+    if (newest && Date.now() - new Date(newest.created_at as string | Date).getTime() < 10 * 60 * 1000) {
       return Response.json(
         { error: "A submission for this email is already pending.", candidateId: newest.id },
         { status: 429 },
@@ -367,36 +718,41 @@ export async function POST(request: Request) {
   } catch {
   }
 
-  const { data: dupe } = await db
-    .from("candidates")
-    .select("id")
-    .eq("contact_email", email)
-    .limit(1)
-    .maybeSingle();
-  if ((dupe as { id: string } | null)?.id) {
+  let dupe: { _id: string } | null = null;
+  try {
+    dupe = await candidates.findOne({ contact_email: email }, { projection: { _id: 1 } });
+  } catch {
+    dupe = null;
+  }
+  if (dupe?._id) {
     return Response.json(
-      { error: "A profile already exists for this email.", candidateId: (dupe as { id: string }).id },
+      { error: "A profile already exists for this email.", candidateId: dupe._id },
       { status: 409 },
     );
   }
 
   let userId: string | null = null;
   let createdUser = false;
-  const existing = await db.from("users").select("id").eq("email", email).maybeSingle();
-  if (existing.data) {
-    userId = (existing.data as { id: string }).id;
-  } else {
-    const { data: user } = await db
-      .from("users")
-      .insert({ email, role: "candidate" })
-      .select("id")
-      .single();
-    if (!user) {
-      console.error("[candidates] user create failed");
-      return Response.json({ error: "user create failed" }, { status: 500 });
+  const users = await col<AppDoc>(Collections.users);
+  try {
+    const existing = await users.findOne({ email }, { projection: { _id: 1 } });
+    if (existing) {
+      userId = existing._id;
+    } else {
+      const res = await users.insertOne({
+        _id: randomUUID(),
+        email,
+        role: "candidate",
+        status: "active",
+        email_verified: false,
+        created_at: new Date(),
+      });
+      userId = res.insertedId;
+      createdUser = true;
     }
-    userId = (user as { id: string }).id;
-    createdUser = true;
+  } catch (e) {
+    console.error("[candidates] user create failed", redactPii((e as Error)?.message ?? String(e)).slice(0, 200));
+    return Response.json({ error: "user create failed" }, { status: 500 });
   }
 
   const remoteMap: Record<string, string> = { remote: "remote_only", hybrid: "hybrid", onsite: "onsite" };
@@ -408,7 +764,9 @@ export async function POST(request: Request) {
     domain: c.domain,
     current_position: c.current_role || c.role,
     total_experience_years: c.exp ?? 0,
+    education_level: null,
     location_city: c.location_pref || c.location,
+    location_country: "India",
     remote_preference: remoteMap[c.remote_pref] ?? "flexible",
     open_to_relocation: c.relocation ?? false,
     min_salary: c.min_salary ?? 0,
@@ -433,20 +791,28 @@ export async function POST(request: Request) {
     portfolio_url: c.links?.portfolio || null,
     resume_url: c.links?.resume_url || null,
     photo_url: c.photo_url || null,
+    profile_strength: null,
+    freshness_updated_at: new Date(),
+    created_at: new Date(),
+    updated_at: new Date(),
   };
-  let { data: cand, error: candErr } = await db.from("candidates").insert(row).select("id").single();
-  if (!cand && isMissingColumnErr(candErr)) {
-    ({ data: cand, error: candErr } = await db
-      .from("candidates")
-      .insert(stripShowFlags(row))
-      .select("id")
-      .single());
+  const candidateId = randomUUID();
+  try {
+    await candidates.insertOne({ _id: candidateId, ...row });
+  } catch (e) {
+    if (isMissingColumnErr(e)) {
+      // Parity with the old schema-drift fallback (Mongo stores any field).
+      try {
+        await candidates.insertOne({ _id: candidateId, ...stripShowFlags(row) });
+      } catch {
+        console.error("[candidates] create failed");
+        return Response.json({ error: "candidate create failed" }, { status: 500 });
+      }
+    } else {
+      console.error("[candidates] create failed");
+      return Response.json({ error: "candidate create failed" }, { status: 500 });
+    }
   }
-  if (!cand) {
-    console.error("[candidates] create failed");
-    return Response.json({ error: "candidate create failed" }, { status: 500 });
-  }
-  const candidateId = (cand as { id: string }).id;
 
   const warnings: string[] = [];
   const cleanTech = (t: unknown): string[] =>
@@ -458,21 +824,24 @@ export async function POST(request: Request) {
       : null;
   try {
     if (c.experiences?.length) {
-      const { error } = await db.from("work_experiences").insert(c.experiences.map((x) => ({
-        candidate_id: candidateId,
-        company_name: x.company,
-        job_title: x.title,
-        start_date: toDateInput(x.start_date),
-        end_date: toDateInput(x.end_date),
-        is_current: x.current ?? false,
-        description: x.description || null,
-        achievements: x.achievements || null,
-        tech_stack: cleanTech(x.tech),
-      })));
-      if (error) {
-        console.error("[candidates] experience insert failed", redactPii(error.message));
-        warnings.push("experience: could not save (code EXP_SAVE)");
-      }
+      const workExperiences = await col<AppDoc>(Collections.workExperiences);
+      await workExperiences.insertMany(
+        c.experiences.map((x) => ({
+          _id: randomUUID(),
+          candidate_id: candidateId,
+          company_name: x.company,
+          job_title: x.title,
+          employment_type: null,
+          start_date: toDateInput(x.start_date),
+          end_date: toDateInput(x.end_date),
+          is_current: x.current ?? false,
+          description: x.description || null,
+          achievements: x.achievements || null,
+          tech_stack: cleanTech(x.tech),
+          evidence_links: [],
+          created_at: new Date(),
+        })),
+      );
     }
   } catch (e) {
     console.error("[candidates] experience insert threw", redactPii((e as Error).message));
@@ -480,23 +849,26 @@ export async function POST(request: Request) {
   }
   try {
     if (c.projects?.length) {
-      const { error } = await db.from("projects").insert(c.projects.map((p) => ({
-        candidate_id: candidateId,
-        title: p.title,
-        description: p.description,
-        problem_statement: p.problem || null,
-        tech_stack: cleanTech(p.tech),
-        role_in_project: p.role || null,
-        project_link: p.links?.live || null,
-        repo_link: p.links?.repo || null,
-        deployment_link: p.links?.demo || p.links?.live || null,
-        impact_summary: [p.impact, p.users_scale, p.hardest_challenge, p.personal_contribution].filter(Boolean).join("\n\n") || null,
-        project_type: cleanProjType(p.project_type),
-      })));
-      if (error) {
-        console.error("[candidates] projects insert failed", redactPii(error.message));
-        warnings.push("projects: could not save (code PRJ_SAVE)");
-      }
+      const projectsCol = await col<AppDoc>(Collections.projects);
+      await projectsCol.insertMany(
+        c.projects.map((p) => ({
+          _id: randomUUID(),
+          candidate_id: candidateId,
+          title: p.title,
+          description: p.description,
+          problem_statement: p.problem || null,
+          tech_stack: cleanTech(p.tech),
+          role_in_project: p.role || null,
+          project_link: p.links?.live || null,
+          repo_link: p.links?.repo || null,
+          deployment_link: p.links?.demo || p.links?.live || null,
+          impact_summary: [p.impact, p.users_scale, p.hardest_challenge, p.personal_contribution].filter(Boolean).join("\n\n") || null,
+          project_type: cleanProjType(p.project_type),
+          start_date: null,
+          end_date: null,
+          created_at: new Date(),
+        })),
+      );
     }
   } catch (e) {
     console.error("[candidates] projects insert threw", redactPii((e as Error).message));
@@ -504,23 +876,21 @@ export async function POST(request: Request) {
   }
   try {
     if (c.oss?.length) {
-      const { error } = await db.from("open_source_contributions").insert(
-        c.oss
-          .filter((o) => o.repo_name?.trim())
-          .map((o) => ({
-            candidate_id: candidateId,
-            repo_name: o.repo_name.trim(),
-            repo_url: o.repo_url || null,
-            description: o.description || null,
-            pr_links: (o.pr_links ?? []).filter((u) => u && u.trim()),
-            tech_stack: cleanTech(o.tech),
-            role: o.role || "Contributor",
-          })),
-      );
-      if (error) {
-        console.error("[candidates] oss insert failed", redactPii(error.message));
-        warnings.push("open source: could not save (code OSS_SAVE)");
-      }
+      const ossCol = await col<AppDoc>(Collections.openSourceContributions);
+      const ossRows = c.oss
+        .filter((o) => o.repo_name?.trim())
+        .map((o) => ({
+          _id: randomUUID(),
+          candidate_id: candidateId,
+          repo_name: o.repo_name.trim(),
+          repo_url: o.repo_url || null,
+          description: o.description || null,
+          pr_links: (o.pr_links ?? []).filter((u) => u && u.trim()),
+          tech_stack: cleanTech(o.tech),
+          role: o.role || "Contributor",
+          created_at: new Date(),
+        }));
+      if (ossRows.length) await ossCol.insertMany(ossRows);
     }
   } catch (e) {
     console.error("[candidates] oss insert threw", redactPii((e as Error).message));
@@ -531,6 +901,7 @@ export async function POST(request: Request) {
       const rows = c.education.filter((e) => e.institution).map((e) => {
         const yrs = (e.years || "").match(/\d{4}/g) ?? [];
         return {
+          _id: randomUUID(),
           candidate_id: candidateId,
           institution: e.institution,
           degree: e.degree || null,
@@ -541,11 +912,8 @@ export async function POST(request: Request) {
         };
       });
       if (rows.length) {
-        const { error } = await db.from("education").insert(rows);
-        if (error) {
-          console.error("[candidates] education insert failed", redactPii(error.message));
-          warnings.push("education: could not save (code EDU_SAVE)");
-        }
+        const educationCol = await col<AppDoc>(Collections.education);
+        await educationCol.insertMany(rows);
       }
     }
   } catch (e) {
@@ -554,17 +922,22 @@ export async function POST(request: Request) {
   }
   try {
     if (c.skills?.length) {
-      const { canon, byName } = await skillIdMap(db, c.skills);
+      const { canon, byName } = await skillIdMap(c.skills);
       const links = canon.flatMap((name) => {
         const id = byName.get(name.toLowerCase());
         return id ? [{ candidate_id: candidateId, skill_id: id, source: "self_reported" }] : [];
       });
       if (links.length) {
-        const { error } = await db.from("candidate_skills").upsert(links, { onConflict: "candidate_id,skill_id" });
-        if (error) {
-          console.error("[candidates] skills upsert failed", redactPii(error.message));
-          warnings.push("skills: could not save (code SKL_SAVE)");
-        }
+        const candidateSkills = await col<AppDoc>(Collections.candidateSkills);
+        await candidateSkills.bulkWrite(
+          links.map((l) => ({
+            updateOne: {
+              filter: { candidate_id: l.candidate_id, skill_id: l.skill_id },
+              update: { $set: { candidate_id: l.candidate_id, skill_id: l.skill_id, source: l.source } },
+              upsert: true,
+            },
+          })),
+        );
       } else if (c.skills?.length) {
         warnings.push("skills: some skill names were skipped");
       }
@@ -577,14 +950,12 @@ export async function POST(request: Request) {
   if (warnings.some((w) => /\(code [A-Z_]+\)/.test(w))) {
     try {
       if (candidateId) {
-        const { error: delErr } = await db.from("candidates").delete().eq("id", candidateId);
-        if (delErr) throw delErr;
+        await cascadeDeleteCandidate(candidateId);
       }
       if (createdUser && userId) {
-        const { error: userDelErr } = await db.from("users").delete().eq("id", userId);
-        if (userDelErr) throw userDelErr;
+        await users.deleteOne({ _id: userId });
       }
-    } catch (e) {
+    } catch {
       console.error("[candidates] rollback failed — manual cleanup needed", redactPii(candidateId ?? ""));
       return Response.json({ error: "Could not save the profile and rollback failed. Contact support." }, { status: 500 });
     }
@@ -620,14 +991,25 @@ export async function PATCH(request: Request) {
   } catch {
     return Response.json({ error: "Something went wrong. Try again." }, { status: 500 });
   }
-  const { data } = await db
-    .from("candidates")
-    .update({ visibility_status: parsed.data.visibility_status })
-    .eq("id", parsed.data.id)
-    .select("id, visibility_status")
-    .maybeSingle();
-  if (!data) return Response.json({ error: "candidate not found" }, { status: 404 });
-  return Response.json({ candidate: data });
+  try {
+    const candidates = db.collection<AppDoc>(Collections.candidates);
+    const res = await candidates.updateOne(
+      { _id: parsed.data.id },
+      { $set: { visibility_status: parsed.data.visibility_status, updated_at: new Date() } },
+    );
+    if (!res.matchedCount) {
+      return Response.json({ error: "candidate not found" }, { status: 404 });
+    }
+    const row = await candidates.findOne(
+      { _id: parsed.data.id },
+      { projection: { visibility_status: 1, _id: 1 } },
+    );
+    if (!row) return Response.json({ error: "candidate not found" }, { status: 404 });
+    return Response.json({ candidate: { id: row._id, visibility_status: row.visibility_status } });
+  } catch {
+    // Old code surfaced update/read errors as a null maybeSingle → 404.
+    return Response.json({ error: "candidate not found" }, { status: 404 });
+  }
 }
 
 export async function PUT(request: Request) {
@@ -652,14 +1034,18 @@ export async function PUT(request: Request) {
   if (!parsed.success) {
     return Response.json({ errors: parsed.error.flatten() }, { status: 400 });
   }
-  const db = supabaseAdmin();
-  const { data: existing } = await db
-    .from("candidates")
-    .select("id, user_id, contact_email")
-    .eq("id", id)
-    .maybeSingle();
+  const candidates = await col<AppDoc>(Collections.candidates);
+  let existing: { _id: string; user_id: string; contact_email: string } | null = null;
+  try {
+    existing = (await candidates.findOne(
+      { _id: id },
+      { projection: { user_id: 1, contact_email: 1 } },
+    )) as { _id: string; user_id: string; contact_email: string } | null;
+  } catch {
+    existing = null;
+  }
   if (!existing) return Response.json({ error: "candidate not found" }, { status: 404 });
-  const prev = existing as { id: string; user_id: string; contact_email: string };
+  const prev = existing;
   const c = parsed.data;
   const present = new Set(Object.keys(rest));
 
@@ -738,39 +1124,32 @@ export async function PUT(request: Request) {
           { status: 403 },
         );
       }
-      const clash = await db.from("users").select("id").eq("email", email).maybeSingle();
-      if ((clash.data as { id: string } | null)?.id) {
+      const users = await col<AppDoc>(Collections.users);
+      let clash: { _id: string } | null = null;
+      try {
+        clash = await users.findOne({ email }, { projection: { _id: 1 } });
+      } catch {
+        clash = null;
+      }
+      if (clash?._id) {
         return Response.json(
           { error: "That email is already in use. Verify ownership first." },
           { status: 409 },
         );
       }
-      // Keep Supabase Auth in sync: OTPs route to the Auth user's email, so
-      // updating only public rows would strand future codes at the old inbox
-      // and orphan any login attempted from the new address.
-      const { data: ownerRow } = await db
-        .from("users")
-        .select("id, auth_id")
-        .eq("id", prev.user_id)
-        .maybeSingle();
-      const ownerAuthId = (ownerRow as { auth_id: string | null } | null)?.auth_id ?? null;
-      if (ownerAuthId) {
-        const { error: authErr } = await db.auth.admin.updateUserById(ownerAuthId, { email });
-        if (authErr) {
-          const msg = authErr.message ?? "";
-          if (/already|exists|taken|duplicate/i.test(msg)) {
-            return Response.json(
-              { error: "That email is already in use. Verify ownership first." },
-              { status: 409 },
-            );
-          }
-          console.error("[candidates] auth email update failed", redactPii(msg).slice(0, 200));
-          return Response.json({ error: "Could not change email. Try again." }, { status: 500 });
+      // Mongo `users` is the single identity row (no separate auth store):
+      // updating email here is the whole change — OTPs and logins read it.
+      try {
+        await users.updateOne({ _id: prev.user_id }, { $set: { email } });
+      } catch (e) {
+        const msg = (e as Error)?.message ?? "";
+        if (isDuplicateKey(e) || /already|exists|taken|duplicate/i.test(msg)) {
+          return Response.json(
+            { error: "That email is already in use. Verify ownership first." },
+            { status: 409 },
+          );
         }
-      }
-      const { error: userErr } = await db.from("users").update({ email }).eq("id", prev.user_id);
-      if (userErr) {
-        console.error("[candidates] user email update failed", redactPii(userErr.message));
+        console.error("[candidates] user email update failed", redactPii(msg));
         return Response.json({ error: "Could not change email. Try again." }, { status: 500 });
       }
       patch.contact_email = email;
@@ -778,13 +1157,21 @@ export async function PUT(request: Request) {
   }
 
   if (Object.keys(patch).length > 0) {
-    let { error } = await db.from("candidates").update(patch).eq("id", id);
-    if (error && isMissingColumnErr(error)) {
-      ({ error } = await db.from("candidates").update(stripShowFlags(patch)).eq("id", id));
-    }
-    if (error) {
-      console.error("[candidates] update failed", redactPii(id));
-      return Response.json({ error: "candidate update failed" }, { status: 500 });
+    try {
+      await candidates.updateOne({ _id: id }, { $set: { ...patch, updated_at: new Date() } });
+    } catch (e) {
+      if (isMissingColumnErr(e)) {
+        // Parity with the old schema-drift fallback (Mongo stores any field).
+        try {
+          await candidates.updateOne({ _id: id }, { $set: { ...stripShowFlags(patch), updated_at: new Date() } });
+        } catch {
+          console.error("[candidates] update failed", redactPii(id));
+          return Response.json({ error: "candidate update failed" }, { status: 500 });
+        }
+      } else {
+        console.error("[candidates] update failed", redactPii(id));
+        return Response.json({ error: "candidate update failed" }, { status: 500 });
+      }
     }
   }
 
@@ -809,22 +1196,35 @@ export async function PUT(request: Request) {
         achievements: x.achievements || null,
         tech_stack: cleanTech(x.tech),
       }));
-      const { data: expRows, error: expFetchErr } = await db
-        .from("work_experiences")
-        .select("company_name, job_title, start_date, end_date, is_current, description, achievements, tech_stack")
-        .eq("candidate_id", id);
-      if (expFetchErr) throw expFetchErr;
-      if (!sameRows(nextExp, (expRows ?? []) as unknown[])) {
+      const workExperiences = await col<AppDoc>(Collections.workExperiences);
+      const expRows = await workExperiences
+        .find(
+          { candidate_id: id },
+          {
+            projection: {
+              company_name: 1,
+              job_title: 1,
+              start_date: 1,
+              end_date: 1,
+              is_current: 1,
+              description: 1,
+              achievements: 1,
+              tech_stack: 1,
+              _id: 0,
+            },
+          },
+        )
+        .toArray();
+      if (!sameRows(nextExp, expRows as unknown[])) {
         materialChanged = true;
-        await db.from("work_experiences").delete().eq("candidate_id", id);
+        await workExperiences.deleteMany({ candidate_id: id });
         if (nextExp.length) {
-          const { error } = await db.from("work_experiences").insert(
-            nextExp.map((r) => ({ candidate_id: id, ...r })),
-          );
-          if (error) {
-            console.error("[candidates] experience replace failed", redactPii(error.message));
+          try {
+            await workExperiences.insertMany(nextExp.map((r) => ({ _id: randomUUID(), candidate_id: id, ...r })));
+          } catch (e) {
+            console.error("[candidates] experience replace failed", redactPii((e as Error).message));
             putWarnings.push("experience: could not save (code EXP_SAVE)");
-            await restoreRows(db, "work_experiences", id, (expRows ?? []) as unknown[], "experience");
+            await restoreRows(Collections.workExperiences, id, expRows as unknown[], "experience");
           }
         }
       }
@@ -847,22 +1247,37 @@ export async function PUT(request: Request) {
         impact_summary: [p.impact, p.users_scale, p.hardest_challenge, p.personal_contribution].filter(Boolean).join("\n\n") || null,
         project_type: cleanProjType(p.project_type),
       }));
-      const { data: projRows, error: projFetchErr } = await db
-        .from("projects")
-        .select("title, description, problem_statement, tech_stack, role_in_project, project_link, repo_link, deployment_link, impact_summary, project_type")
-        .eq("candidate_id", id);
-      if (projFetchErr) throw projFetchErr;
-      if (!sameRows(nextProj, (projRows ?? []) as unknown[])) {
+      const projectsCol = await col<AppDoc>(Collections.projects);
+      const projRows = await projectsCol
+        .find(
+          { candidate_id: id },
+          {
+            projection: {
+              title: 1,
+              description: 1,
+              problem_statement: 1,
+              tech_stack: 1,
+              role_in_project: 1,
+              project_link: 1,
+              repo_link: 1,
+              deployment_link: 1,
+              impact_summary: 1,
+              project_type: 1,
+              _id: 0,
+            },
+          },
+        )
+        .toArray();
+      if (!sameRows(nextProj, projRows as unknown[])) {
         materialChanged = true;
-        await db.from("projects").delete().eq("candidate_id", id);
+        await projectsCol.deleteMany({ candidate_id: id });
         if (nextProj.length) {
-          const { error } = await db.from("projects").insert(
-            nextProj.map((r) => ({ candidate_id: id, ...r })),
-          );
-          if (error) {
-            console.error("[candidates] projects replace failed", redactPii(error.message));
+          try {
+            await projectsCol.insertMany(nextProj.map((r) => ({ _id: randomUUID(), candidate_id: id, ...r })));
+          } catch (e) {
+            console.error("[candidates] projects replace failed", redactPii((e as Error).message));
             putWarnings.push("projects: could not save (code PRJ_SAVE)");
-            await restoreRows(db, "projects", id, (projRows ?? []) as unknown[], "projects");
+            await restoreRows(Collections.projects, id, projRows as unknown[], "projects");
           }
         }
       }
@@ -883,22 +1298,33 @@ export async function PUT(request: Request) {
           tech_stack: cleanTech(o.tech),
           role: o.role || "Contributor",
         }));
-      const { data: ossRows, error: ossFetchErr } = await db
-        .from("open_source_contributions")
-        .select("repo_name, repo_url, description, pr_links, tech_stack, role")
-        .eq("candidate_id", id);
-      if (ossFetchErr) throw ossFetchErr;
-      if (!sameRows(nextOss, (ossRows ?? []) as unknown[])) {
+      const ossCol = await col<AppDoc>(Collections.openSourceContributions);
+      const ossRows = await ossCol
+        .find(
+          { candidate_id: id },
+          {
+            projection: {
+              repo_name: 1,
+              repo_url: 1,
+              description: 1,
+              pr_links: 1,
+              tech_stack: 1,
+              role: 1,
+              _id: 0,
+            },
+          },
+        )
+        .toArray();
+      if (!sameRows(nextOss, ossRows as unknown[])) {
         materialChanged = true;
-        await db.from("open_source_contributions").delete().eq("candidate_id", id);
+        await ossCol.deleteMany({ candidate_id: id });
         if (nextOss.length) {
-          const { error } = await db.from("open_source_contributions").insert(
-            nextOss.map((r) => ({ candidate_id: id, ...r })),
-          );
-          if (error) {
-            console.error("[candidates] oss replace failed", redactPii(error.message));
+          try {
+            await ossCol.insertMany(nextOss.map((r) => ({ _id: randomUUID(), candidate_id: id, ...r })));
+          } catch (e) {
+            console.error("[candidates] oss replace failed", redactPii((e as Error).message));
             putWarnings.push("open source: could not save (code OSS_SAVE)");
-            await restoreRows(db, "open_source_contributions", id, (ossRows ?? []) as unknown[], "oss");
+            await restoreRows(Collections.openSourceContributions, id, ossRows as unknown[], "oss");
           }
         }
       }
@@ -920,22 +1346,33 @@ export async function PUT(request: Request) {
           achievements: e.achievements || null,
         };
       });
-      const { data: eduRows, error: eduFetchErr } = await db
-        .from("education")
-        .select("institution, degree, field_of_study, start_year, end_year, achievements")
-        .eq("candidate_id", id);
-      if (eduFetchErr) throw eduFetchErr;
-      if (!sameRows(nextEdu, (eduRows ?? []) as unknown[])) {
+      const educationCol = await col<AppDoc>(Collections.education);
+      const eduRows = await educationCol
+        .find(
+          { candidate_id: id },
+          {
+            projection: {
+              institution: 1,
+              degree: 1,
+              field_of_study: 1,
+              start_year: 1,
+              end_year: 1,
+              achievements: 1,
+              _id: 0,
+            },
+          },
+        )
+        .toArray();
+      if (!sameRows(nextEdu, eduRows as unknown[])) {
         materialChanged = true;
-        await db.from("education").delete().eq("candidate_id", id);
+        await educationCol.deleteMany({ candidate_id: id });
         if (nextEdu.length) {
-          const { error } = await db.from("education").insert(
-            nextEdu.map((r) => ({ candidate_id: id, ...r })),
-          );
-          if (error) {
-            console.error("[candidates] education replace failed", redactPii(error.message));
+          try {
+            await educationCol.insertMany(nextEdu.map((r) => ({ _id: randomUUID(), candidate_id: id, ...r })));
+          } catch (e) {
+            console.error("[candidates] education replace failed", redactPii((e as Error).message));
             putWarnings.push("education: could not save (code EDU_SAVE)");
-            await restoreRows(db, "education", id, (eduRows ?? []) as unknown[], "education");
+            await restoreRows(Collections.education, id, eduRows as unknown[], "education");
           }
         }
       }
@@ -946,50 +1383,77 @@ export async function PUT(request: Request) {
   }
   if (present.has("skills")) {
     try {
-      const { canon, byName, ok: skillsOk } = await skillIdMap(db, c.skills ?? []);
+      const { canon, byName, ok: skillsOk } = await skillIdMap(c.skills ?? []);
       const nextNames = [...canon.map((s) => s.toLowerCase())].sort();
-      const { data: haveRows, error: haveErr } = await db
-        .from("candidate_skills")
-        .select("skills(name)")
-        .eq("candidate_id", id);
-      if (!skillsOk || haveErr) {
+      const candidateSkills = await col<AppDoc>(Collections.candidateSkills);
+      const skillsCol = await col<AppDoc>(Collections.skills);
+      let haveNames: string[] | null = null;
+      try {
+        const haveLinks = await candidateSkills
+          .find({ candidate_id: id }, { projection: { skill_id: 1, _id: 0 } })
+          .toArray();
+        const skillIds = [...new Set(haveLinks.map((r) => String(r.skill_id ?? "")))].filter(Boolean);
+        const skillDocs = skillIds.length
+          ? await skillsCol.find({ _id: { $in: skillIds } }, { projection: { name: 1 } }).toArray()
+          : [];
+        haveNames = skillDocs
+          .map((s) => String(s.name ?? "").toLowerCase())
+          .filter(Boolean)
+          .sort();
+      } catch {
+        haveNames = null;
+      }
+      if (!skillsOk || haveNames === null) {
         console.error("[candidates] skills read failed — skipping rewrite to protect existing links");
         putWarnings.push("skills: could not save (code SKL_SAVE)");
       } else {
-      const haveNames = (((haveRows ?? []) as unknown as { skills: { name: string } | { name: string }[] | null }[])
-        .flatMap((s) => (Array.isArray(s.skills) ? s.skills : s.skills ? [s.skills] : []))
-        .map((s) => s.name.toLowerCase())
-        .filter(Boolean) as string[]).sort();
-      const links = canon.flatMap((name) => {
-        const sid = byName.get(name.toLowerCase());
-        return sid ? [{ candidate_id: id, skill_id: sid, source: "self_reported" }] : [];
-      });
-      if (!(links.length > 0 && JSON.stringify(nextNames) === JSON.stringify(haveNames))) {
-        materialChanged = true;
-        await db.from("candidate_skills").delete().eq("candidate_id", id);
-        if ((c.skills ?? []).length > 0) {
-          if (links.length) {
-            const { error } = await db.from("candidate_skills").upsert(links, { onConflict: "candidate_id,skill_id" });
-            if (error) {
-              console.error("[candidates] skills replace failed", redactPii(error.message));
-              putWarnings.push("skills: could not save (code SKL_SAVE)");
-              const prevLinks = haveNames.flatMap((name) => {
-                const sid = byName.get(name);
-                return sid ? [{ candidate_id: id, skill_id: sid, source: "self_reported" }] : [];
-              });
-              if (prevLinks.length) {
-                try {
-                  await db.from("candidate_skills").upsert(prevLinks, { onConflict: "candidate_id,skill_id" });
-                } catch {
+        const links = canon.flatMap((name) => {
+          const sid = byName.get(name.toLowerCase());
+          return sid ? [{ candidate_id: id, skill_id: sid, source: "self_reported" }] : [];
+        });
+        if (!(links.length > 0 && JSON.stringify(nextNames) === JSON.stringify(haveNames))) {
+          materialChanged = true;
+          await candidateSkills.deleteMany({ candidate_id: id });
+          if ((c.skills ?? []).length > 0) {
+            if (links.length) {
+              try {
+                await candidateSkills.bulkWrite(
+                  links.map((l) => ({
+                    updateOne: {
+                      filter: { candidate_id: l.candidate_id, skill_id: l.skill_id },
+                      update: { $set: { candidate_id: l.candidate_id, skill_id: l.skill_id, source: l.source } },
+                      upsert: true,
+                    },
+                  })),
+                );
+              } catch (e) {
+                console.error("[candidates] skills replace failed", redactPii((e as Error).message));
+                putWarnings.push("skills: could not save (code SKL_SAVE)");
+                const prevLinks = haveNames.flatMap((name) => {
+                  const sid = byName.get(name);
+                  return sid ? [{ candidate_id: id, skill_id: sid, source: "self_reported" }] : [];
+                });
+                if (prevLinks.length) {
+                  try {
+                    await candidateSkills.bulkWrite(
+                      prevLinks.map((l) => ({
+                        updateOne: {
+                          filter: { candidate_id: l.candidate_id, skill_id: l.skill_id },
+                          update: { $set: { candidate_id: l.candidate_id, skill_id: l.skill_id, source: l.source } },
+                          upsert: true,
+                        },
+                      })),
+                    );
+                  } catch {
+                  }
                 }
               }
+            } else {
+              putWarnings.push("skills: some skill names were skipped");
             }
-          } else {
-            putWarnings.push("skills: some skill names were skipped");
           }
         }
       }
-    }
     } catch (e) {
       console.error("[candidates] skills replace threw", redactPii((e as Error).message));
       putWarnings.push("skills: could not save (code SKL_SAVE)");
@@ -998,7 +1462,7 @@ export async function PUT(request: Request) {
 
   if (materialChanged) {
     try {
-      await db.from("candidates").update({ updated_at: new Date().toISOString() }).eq("id", id);
+      await candidates.updateOne({ _id: id }, { $set: { updated_at: new Date() } });
     } catch {
     }
     try {
@@ -1030,28 +1494,33 @@ export async function DELETE(request: Request) {
   }
   const denied = await guardOwnerAuth(request, id as string);
   if (denied) return denied;
-  const db = supabaseAdmin();
-  const { data: doomed } = await db
-    .from("candidates")
-    .select("resume_url, photo_url, portfolio_url")
-    .eq("id", id as string)
-    .maybeSingle();
-  const { error } = await db.from("candidates").delete().eq("id", id as string);
-  if (error) {
+
+  let doomed: Record<string, unknown> | null = null;
+  try {
+    doomed = await (await col<AppDoc>(Collections.candidates)).findOne(
+      { _id: id as string },
+      { projection: { resume_url: 1, photo_url: 1, portfolio_url: 1, _id: 0 } },
+    );
+  } catch {
+    doomed = null;
+  }
+  try {
+    await cascadeDeleteCandidate(id as string);
+  } catch {
     console.error("[candidates] delete failed");
     return Response.json({ error: "candidate delete failed" }, { status: 500 });
   }
   try {
     const paths = doomed as { resume_url?: string | null; photo_url?: string | null; portfolio_url?: string | null } | null;
-    const jobs: Promise<unknown>[] = [];
+    const jobs: Promise<void>[] = [];
     if (paths?.resume_url && !/^https?:\/\//i.test(paths.resume_url)) {
-      jobs.push(db.storage.from("resumes").remove([paths.resume_url]));
+      jobs.push(deleteObject("resumes", paths.resume_url));
     }
     if (paths?.photo_url && !/^https?:\/\//i.test(paths.photo_url)) {
-      jobs.push(db.storage.from("photos").remove([paths.photo_url]));
+      jobs.push(deleteObject("photos", paths.photo_url));
     }
     if (paths?.portfolio_url && !/^https?:\/\//i.test(paths.portfolio_url)) {
-      jobs.push(db.storage.from("portfolios").remove([paths.portfolio_url]));
+      jobs.push(deleteObject("portfolios", paths.portfolio_url));
     }
     if (jobs.length) await Promise.all(jobs);
   } catch {

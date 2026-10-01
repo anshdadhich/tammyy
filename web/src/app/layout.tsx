@@ -1,7 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import MotionProvider from "@/components/MotionProvider";
-import AuthHashHandler from "@/components/AuthHashHandler";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -74,7 +73,6 @@ export default function RootLayout({
         />
       </head>
       <body>
-        <AuthHashHandler />
         <MotionProvider>{children}</MotionProvider>
       </body>
     </html>

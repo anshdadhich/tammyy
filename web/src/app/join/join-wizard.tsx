@@ -1096,16 +1096,16 @@ export default function JoinWizard() {
   const [done, setDone] = useState<{ id: string; warnings: string[] } | null>(null);
   const [lookupBusy, setLookupBusy] = useState(false);
   const [lookupMsg, setLookupMsg] = useState<string | null>(null);
-  const [otpPending, setOtpPending] = useState<{
+  const [claimPending, setClaimPending] = useState<{
     candidateId: string;
     mode: "created" | "exists";
     message: string;
     warnings: string[];
   } | null>(null);
-  const [otpCode, setOtpCode] = useState("");
-  const [otpBusy, setOtpBusy] = useState(false);
-  const [otpErr, setOtpErr] = useState<string | null>(null);
-  const [otpInfo, setOtpInfo] = useState<string | null>(null);
+  const [claimPassword, setClaimPassword] = useState("");
+  const [claimConfirm, setClaimConfirm] = useState("");
+  const [claimBusy, setClaimBusy] = useState(false);
+  const [claimErr, setClaimErr] = useState<string | null>(null);
 
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
@@ -1332,73 +1332,41 @@ export default function JoinWizard() {
     return map;
   };
 
-  const startOtpClaim = async (
+  /** Open the password-claim step after publish (no network round trip). */
+  const startClaim = (
     candidateId: string,
     mode: "created" | "exists",
     message: string,
     warnings: string[],
   ) => {
-    const email = draftRef.current.email.trim();
-    setOtpPending({ candidateId, mode, message, warnings });
-    setOtpCode("");
-    setOtpErr(null);
-    setOtpInfo(null);
-    try {
-      const res = await fetch("/api/auth/otp/request", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, next: "/join" }),
-      });
-      await res.json().catch(() => null);
-      if (!res.ok) {
-        setOtpErr("Could not send the verification code - use resend to retry.");
-        return;
-      }
-      setOtpInfo("Check your inbox for the verification code — or click the sign-in link in the same email.");
-    } catch {
-      setOtpErr("Network error - use resend to retry.");
-    }
+    setClaimPending({ candidateId, mode, message, warnings });
+    setClaimPassword("");
+    setClaimConfirm("");
+    setClaimErr(null);
   };
 
-  const resendOtpClaim = async () => {
-    if (!otpPending || otpBusy) return;
+  const submitClaim = async () => {
+    if (!claimPending || claimBusy) return;
     const email = draftRef.current.email.trim();
-    setOtpBusy(true);
-    setOtpErr(null);
-    try {
-      const res = await fetch("/api/auth/otp/request", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, next: "/join" }),
-      });
-      await res.json().catch(() => null);
-      if (!res.ok) {
-        setOtpErr("Could not resend the code - try again.");
-        return;
-      }
-      setOtpInfo("A fresh code is on its way.");
-    } catch {
-      setOtpErr("Network error - try again.");
-    } finally {
-      setOtpBusy(false);
-    }
-  };
-
-  const verifyOtpClaim = async () => {
-    if (!otpPending || otpBusy) return;
-    const token = otpCode.trim().replace(/\s+/g, "");
-    if (token.length < 6) {
-      setOtpErr("Enter the code from your email.");
+    if (claimPassword.length < 8) {
+      setClaimErr("Password must be at least 8 characters.");
       return;
     }
-    const email = draftRef.current.email.trim();
-    setOtpBusy(true);
-    setOtpErr(null);
+    if (claimPassword.length > 200) {
+      setClaimErr("Password must be at most 200 characters.");
+      return;
+    }
+    if (claimPassword !== claimConfirm) {
+      setClaimErr("Passwords do not match.");
+      return;
+    }
+    setClaimBusy(true);
+    setClaimErr(null);
     try {
-      const res = await fetch("/api/auth/otp/verify", {
+      const res = await fetch("/api/auth/claim", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, token }),
+        body: JSON.stringify({ email, password: claimPassword }),
       });
       const body = (await res.json().catch(() => null)) as {
         ok?: unknown;
@@ -1406,14 +1374,14 @@ export default function JoinWizard() {
         error?: string;
       } | null;
       if (!res.ok || body?.ok !== true) {
-        setOtpErr(body?.error ?? "That code did not work - try again.");
+        setClaimErr(body?.error ?? "Could not set your password - try again.");
         return;
       }
-      const { candidateId, mode, message, warnings } = otpPending;
-      setOtpPending(null);
-      setOtpCode("");
-      setOtpErr(null);
-      setOtpInfo(null);
+      const { candidateId, mode, message, warnings } = claimPending;
+      setClaimPending(null);
+      setClaimPassword("");
+      setClaimConfirm("");
+      setClaimErr(null);
       window.dispatchEvent(new Event(SESSION_EVENT));
       if (mode === "created") {
         setDone({ id: candidateId, warnings });
@@ -1422,9 +1390,9 @@ export default function JoinWizard() {
       setNotice(message || "A visible profile already exists for this email.");
       setNoticeId(candidateId);
     } catch {
-      setOtpErr("Network error - try again.");
+      setClaimErr("Network error - try again.");
     } finally {
-      setOtpBusy(false);
+      setClaimBusy(false);
     }
   };
 
@@ -1463,7 +1431,7 @@ export default function JoinWizard() {
         return;
       }
       if (res.status === 409 && body?.candidateId) {
-        await startOtpClaim(
+        startClaim(
           body.candidateId,
           "exists",
           body.error ?? "A visible profile already exists for this email.",
@@ -1472,7 +1440,7 @@ export default function JoinWizard() {
         return;
       }
       if (res.status === 202 && body?.candidateId) {
-        await startOtpClaim(
+        startClaim(
           body.candidateId,
           "created",
           "",
@@ -2628,56 +2596,76 @@ export default function JoinWizard() {
         </div>
       ) : null}
 
-      {otpPending ? (
+      {claimPending ? (
         <div className="notice mt-6" role="status">
           <Info aria-hidden="true" />
           <span className="grid gap-3 w-full">
             <span>
-              {otpPending.mode === "created"
-                ? "Your page is ready - verify your email to finish publishing."
-                : "That email already has a page - verify it to take control."}{" "}
-              {otpInfo ?? `A code was sent to ${draft.email.trim()}.`}
+              {claimPending.mode === "created"
+                ? "Your page is ready - set a password to finish publishing."
+                : "That email already has a page - enter its password to take control."}{" "}
+              {`This password signs you back in at ${draft.email.trim()}.`}
             </span>
             <span className="flex flex-wrap items-center gap-2">
               <input
-                id="j-otp-code"
+                id="j-claim-password"
                 className="input"
                 style={{ maxWidth: 220 }}
-                value={otpCode}
+                type="password"
+                value={claimPassword}
                 onChange={(e) => {
-                  setOtpCode(e.target.value);
-                  setOtpErr(null);
+                  setClaimPassword(e.target.value);
+                  setClaimErr(null);
                 }}
-                placeholder="123456"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                maxLength={64}
-                aria-label="Verification code"
-                aria-invalid={otpErr ? true : undefined}
+                placeholder="Password (8+ chars)"
+                autoComplete="new-password"
+                maxLength={200}
+                aria-label="Password"
+                aria-invalid={claimErr ? true : undefined}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void submitClaim();
+                  }
+                }}
+              />
+              <input
+                id="j-claim-confirm"
+                className="input"
+                style={{ maxWidth: 220 }}
+                type="password"
+                value={claimConfirm}
+                onChange={(e) => {
+                  setClaimConfirm(e.target.value);
+                  setClaimErr(null);
+                }}
+                placeholder="Confirm password"
+                autoComplete="new-password"
+                maxLength={200}
+                aria-label="Confirm password"
+                aria-invalid={claimErr ? true : undefined}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void submitClaim();
+                  }
+                }}
               />
               <button
                 type="button"
                 className="btn btn-primary btn-sm press"
-                disabled={otpBusy}
-                onClick={() => void verifyOtpClaim()}
+                disabled={claimBusy}
+                onClick={() => void submitClaim()}
               >
-                {otpBusy ? (
+                {claimBusy ? (
                   <Loader2 size={14} className="animate-spin" aria-hidden="true" />
                 ) : null}
-                Verify code
-              </button>
-              <button
-                type="button"
-                className="btn-link"
-                disabled={otpBusy}
-                onClick={() => void resendOtpClaim()}
-              >
-                Resend
+                Set password
               </button>
             </span>
-            {otpErr ? (
+            {claimErr ? (
               <span className="field-error" role="alert">
-                {otpErr}
+                {claimErr}
               </span>
             ) : null}
           </span>

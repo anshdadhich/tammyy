@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Asha Sharma · Tammy</title>
+<meta name="description" content="Node/Postgres APIs, auth + caching, 2y">
+<script>(function(){try{var t=localStorage.getItem("tammy_theme");var d=t==="dark"||(t===null&&window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.setAttribute("data-theme",d?"dark":"light")}catch(e){}})()</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@100..900&family=Geist:wght@100..900&display=swap" rel="stylesheet">
+<style>:root{--font-geist-sans:"Geist";--font-geist-mono:"Geist Mono"}</style>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="relative min-h-screen bg-paper text-body antialiased selection:bg-brand selection:text-on-brand">
+<a href="#main-content" class="skip-link">Skip to content</a>
+<header class="site-navbar-wrap">
+  <div class="site-navbar !px-[max(24px,calc((100%_-_1160px)/2))]">
+    <a href="index.html" class="site-brand site-brand-text">Tammy</a>
+    <nav aria-label="Main navigation" class="site-navigation hidden lg:flex">
+      <div class="site-nav-links">
+        <a href="index.html#candidates" class="site-nav-link press is-active" style="position: relative" aria-current="page">
+          <span class="site-nav-pill"></span>
+          <span style="position: relative">Candidates</span>
+        </a>
+        <a href="hire.html" class="site-nav-link press" style="position: relative">
+          <span style="position: relative">Employers</span>
+        </a>
+        <a href="index.html#engine" class="site-nav-link press" style="position: relative">
+          <span style="position: relative">Match engine</span>
+        </a>
+        <a href="index.html#faq" class="site-nav-link press" style="position: relative">
+          <span style="position: relative">FAQ</span>
+        </a>
+      </div>
+    </nav>
+    <div class="site-nav-actions">
+      <div class="nav-menu-wrap">
+        <button type="button" class="nav-avatar press" aria-haspopup="menu" aria-expanded="false" aria-label="Account menu">ET</button>
+      </div>
+      <a href="hire-search.html" class="site-login press h-10">Search</a>
+      <button type="button" class="theme-toggle press" aria-label="Toggle color theme" title="Toggle light / dark theme">
+        <svg class="theme-icon-sun" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+        <svg class="theme-icon-moon" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+      </button>
+      <button type="button" class="site-nav-burger lg:hidden press" aria-expanded="false" aria-label="Open menu">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+<main id="main-content">
+
+<section class="pt-20 lg:pt-28 pb-8">
+  <div class="max-w-[1160px] mx-auto px-6">
+    <div class="rise flex flex-wrap items-center gap-3" style="--d: 60ms">
+      <span class="meta-chip">Talent record</span>
+    </div>
+
+    <div class="rise mt-5 flex flex-wrap items-start justify-between gap-6" style="--d: 160ms">
+      <div class="flex items-center gap-4 min-w-0">
+        <span aria-hidden="true" class="grid place-items-center rounded-full bg-brand-soft text-brand-text font-semibold select-none" style="width: 64px; height: 64px; font-size: 23px">AS</span>
+        <div class="min-w-0">
+          <h1 class="text-[clamp(2rem,4.5vw,3.25rem)] font-semibold tracking-[-0.03em] leading-[1.06] text-ink">Asha Sharma</h1>
+          <p class="text-[16px] text-body mt-1.5 max-w-[52ch]">Node/Postgres APIs, auth + caching, 2y</p>
+        </div>
+      </div>
+      <div class="flex flex-wrap items-center gap-2.5">
+        <a href="mailto:asha.backend@demo.local" class="btn btn-primary btn-sm press"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg> Email</a>
+        <a href="tel:+919876500001" class="btn btn-secondary btn-sm press">+91 98765 00001</a>
+        <a href="https://linkedin.com/in/demo-asha.backend" class="btn btn-secondary btn-sm press" target="_blank" rel="noopener noreferrer">LinkedIn <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></a>
+        <a href="https://github.com/demo-asha.backend" class="btn btn-secondary btn-sm press" target="_blank" rel="noopener noreferrer">GitHub <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></a>
+      </div>
+    </div>
+
+    <div class="rise mt-5 flex flex-wrap gap-2.5" style="--d: 280ms">
+      <span class="meta-chip">backend</span>
+      <span class="meta-chip">2 yrs experience</span>
+      <span class="meta-chip"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/></svg> Pune</span>
+      <span class="meta-chip">Remote only</span>
+      <span class="meta-chip">Available immediately</span>
+      <span class="meta-chip">INR 45,000 / month (negotiable)</span>
+    </div>
+  </div>
+</section>
+
+<section class="pb-24">
+  <div class="max-w-[1160px] mx-auto px-6">
+    <div class="grid gap-10 lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start">
+      <div class="min-w-0">
+
+        <section class="mt-9 first:mt-0 pt-8 border-t border-line first:border-0 first:pt-0">
+          <div class="flex items-center gap-3">
+            <h2 class="sq-overline">Profile facts</h2>
+            <span class="h-px flex-1 bg-line" aria-hidden="true"></span>
+          </div>
+          <div class="mt-4">
+            <dl class="grid gap-x-10 lg:grid-cols-2 sq-facts">
+              <div class="sq-detail-row">
+                <dt>Full name</dt>
+                <dd>Asha Sharma</dd>
+              </div>
+              <div class="sq-detail-row">
+                <dt>Headline</dt>
+                <dd>Node/Postgres APIs, auth + caching, 2y</dd>
+              </div>
+              <div class="sq-detail-row">
+                <dt>Domain</dt>
+                <dd>backend</dd>
+              </div>
+              <div class="sq-detail-row">
+                <dt>Current position</dt>
+                <dd>SDE-1 @ Acme</dd>
+              </div>
+              <div class="sq-detail-row">
+                <dt>Experience (years)</dt>
+                <dd>2</dd>
+              </div>
+              <div class="sq-detail-row">
+                <dt>City</dt>
+                <dd>Pune</dd>
+              </div>
+              <div class="sq-detail-row">
+                <dt>Country</dt>
+                <dd>India</dd>
+              </div>
+              <div class="sq-detail-row">
+                <dt>Remote preference</dt>
+                <dd>remote_only</dd>
+              </div>
+              <div class="sq-detail-row">
+                <dt>Availability</dt>
+                <dd>immediate</dd>
+              </div>
+              <div class="sq-detail-row">
+                <dt>Open to relocation</dt>
+                <dd>false</dd>
+              </div>
+              <div class="sq-detail-row">
+                <dt>Minimum salary</dt>
+                <dd>45000</dd>
+              </div>
+              <div class="sq-detail-row">
+                <dt>Salary currency</dt>
+                <dd>INR</dd>
+              </div>
+              <div class="sq-detail-row">
+                <dt>Salary frequency</dt>
+                <dd>monthly</dd>
+              </div>
+              <div class="sq-detail-row">
+                <dt>Salary negotiable</dt>
+                <dd>true</dd>
+              </div>
+              <div class="sq-detail-row">
+                <dt>Email</dt>
+                <dd>asha.backend@demo.local</dd>
+              </div>
+              <div class="sq-detail-row">
+                <dt>Phone</dt>
+                <dd>+91 98765 00001</dd>
+              </div>
+              <div class="sq-detail-row">
+                <dt>LinkedIn</dt>
+                <dd><a href="https://linkedin.com/in/demo-asha.backend" class="underline decoration-muted underline-offset-2 transition-colors hover:text-brand-text" target="_blank" rel="noopener noreferrer">https://linkedin.com/in/demo-asha.backend</a></dd>
+              </div>
+              <div class="sq-detail-row">
+                <dt>GitHub</dt>
+                <dd><a href="https://github.com/demo-asha.backend" class="underline decoration-muted underline-offset-2 transition-colors hover:text-brand-text" target="_blank" rel="noopener noreferrer">https://github.com/demo-asha.backend</a></dd>
+              </div>
+              <div class="sq-detail-row">
+                <dt>Visibility</dt>
+                <dd>visible</dd>
+              </div>
+              <div class="sq-detail-row">
+                <dt>Profile strength</dt>
+                <dd>82</dd>
+              </div>
+              <div class="sq-detail-row">
+                <dt>Summary updated</dt>
+                <dd>2026-09-22T08:41:12.884Z</dd>
+              </div>
+              <div class="sq-detail-row">
+                <dt>Profile refreshed</dt>
+                <dd>2026-09-24T06:10:45.112Z</dd>
+              </div>
+              <div class="sq-detail-row">
+                <dt>Record created</dt>
+                <dd>2026-03-02T11:27:09.556Z</dd>
+              </div>
+              <div class="sq-detail-row">
+                <dt>Record updated</dt>
+                <dd>2026-09-24T06:10:45.112Z</dd>
+              </div>
+              <div class="sq-detail-row">
+                <dt>Candidate id</dt>
+                <dd>aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1</dd>
+              </div>
+            </dl>
+          </div>
+        </section>
+
+        <section class="mt-9 first:mt-0 pt-8 border-t border-line first:border-0 first:pt-0">
+          <div class="flex items-center gap-3">
+            <h2 class="sq-overline">Work experience</h2>
+            <span class="h-px flex-1 bg-line" aria-hidden="true"></span>
+          </div>
+          <div class="mt-4">
+            <div>
+              <div class="border-b border-line py-4 first:pt-0 last:border-b-0 last:pb-0">
+                <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                  <h3 class="text-[15px] font-semibold text-ink tracking-[-0.01em]">Backend Developer</h3>
+                  <p class="font-mono text-[12.5px] text-muted">Jul 2024 – Present</p>
+                </div>
+                <p class="mt-0.5 text-[13.5px] text-body">Acme</p>
+                <p class="mt-2 text-[13.5px] leading-[1.65] text-body whitespace-pre-line"><span class="font-semibold text-ink">Description - </span>Backend developer on the delivery platform - Node.js services over PostgreSQL, with Redis caching in front of the tracking feed.</p>
+                <div class="mt-2">
+                  <p class="text-[13.5px] font-semibold text-ink">Achievements</p>
+                  <ul class="list-disc pl-5 mt-1 grid gap-1.5 text-[13.5px] leading-[1.6] text-body">
+                    <li>Cut p95 latency on the tracking feed from 800ms to 250ms by moving hot reads to Redis.</li>
+                    <li>Shipped token auth and role checks for 3 partner integrations.</li>
+                    <li>Wrote the Postgres schema migrations for shipment events.</li>
+                  </ul>
+                </div>
+                <div class="mt-3 flex flex-wrap gap-2">
+                  <span class="tag">Node.js</span>
+                  <span class="tag">PostgreSQL</span>
+                  <span class="tag">Redis</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="mt-9 first:mt-0 pt-8 border-t border-line first:border-0 first:pt-0">
+          <div class="flex items-center gap-3">
+            <h2 class="sq-overline">Projects</h2>
+            <span class="h-px flex-1 bg-line" aria-hidden="true"></span>
+          </div>
+          <div class="mt-4">
+            <div>
+              <div class="border-b border-line py-4 first:pt-0 last:border-b-0 last:pb-0">
+                <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                  <h3 class="text-[15px] font-semibold text-ink tracking-[-0.01em]">Delivery tracker</h3>
+                  <p class="font-mono text-[12.5px] text-muted">Sole backend · web app</p>
+                </div>
+                <p class="mt-2 text-[13.5px] leading-[1.65] text-body whitespace-pre-line"><span class="font-semibold text-ink">Problem - </span>Dispatchers needed live vehicle positions without hammering Postgres with polls.</p>
+                <p class="mt-2 text-[13.5px] leading-[1.65] text-body whitespace-pre-line"><span class="font-semibold text-ink">Description - </span>Realtime tracking with Socket.io and Redis - one WebSocket channel feeds delivery status to the dispatcher dashboard.</p>
+                <p class="mt-2 text-[13.5px] leading-[1.65] text-body whitespace-pre-line"><span class="font-semibold text-ink">Impact - </span>Holds 500 concurrent connections on a single node while the feed stays under 250ms p95.</p>
+                <div class="mt-3 flex flex-wrap gap-2">
+                  <span class="tag">Node.js</span>
+                  <span class="tag">PostgreSQL</span>
+                  <span class="tag">Redis</span>
+                </div>
+                <div class="mt-2.5 flex flex-col gap-1.5 text-[12.5px]">
+                  <a href="https://github.com/demo-asha.backend/delivery-tracker" class="underline decoration-muted underline-offset-2 transition-colors hover:text-brand-text break-all" target="_blank" rel="noopener noreferrer">https://github.com/demo-asha.backend/delivery-tracker</a>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="mt-9 first:mt-0 pt-8 border-t border-line first:border-0 first:pt-0">
+          <div class="flex items-center gap-3">
+            <h2 class="sq-overline">Education</h2>
+            <span class="h-px flex-1 bg-line" aria-hidden="true"></span>
+          </div>
+          <div class="mt-4">
+            <div>
+              <div class="border-b border-line py-4 first:pt-0 last:border-b-0 last:pb-0">
+                <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                  <h3 class="text-[15px] font-semibold text-ink tracking-[-0.01em]">Savitribai Phule Pune University</h3>
+                  <p class="font-mono text-[12.5px] text-muted">2020 – 2024</p>
+                </div>
+                <p class="mt-0.5 text-[13.5px] text-body">B.E., Computer Engineering</p>
+                <div class="mt-2">
+                  <p class="text-[13.5px] font-semibold text-ink">Achievements</p>
+                  <ul class="list-disc pl-5 mt-1 grid gap-1.5 text-[13.5px] leading-[1.6] text-body">
+                    <li>Graduated with distinction in the final year.</li>
+                    <li>Ran the coding club's weekend workshops on web backends.</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="mt-9 first:mt-0 pt-8 border-t border-line first:border-0 first:pt-0">
+          <div class="flex items-center gap-3">
+            <h2 class="sq-overline">Skills</h2>
+            <span class="h-px flex-1 bg-line" aria-hidden="true"></span>
+          </div>
+          <div class="mt-4">
+            <div class="flex flex-wrap gap-2">
+              <span class="tag">Node.js<span class="text-muted font-normal">· 2 yrs · advanced</span></span>
+              <span class="tag">PostgreSQL<span class="text-muted font-normal">· 2 yrs · advanced</span></span>
+              <span class="tag">Redis<span class="text-muted font-normal">· 2 yrs · advanced</span></span>
+            </div>
+          </div>
+        </section>
+
+        <section class="mt-9 first:mt-0 pt-8 border-t border-line first:border-0 first:pt-0">
+          <div class="flex items-center gap-3">
+            <h2 class="sq-overline">Summary</h2>
+            <span class="h-px flex-1 bg-line" aria-hidden="true"></span>
+          </div>
+          <div class="mt-4">
+            <div class="grid gap-3 text-[15.5px] leading-[1.65] text-body">
+              <p class="text-[16.5px] font-semibold text-ink tracking-[-0.01em] pt-1">Backend developer, 2y · Pune</p>
+              <p>Node.js and PostgreSQL services for logistics teams - auth, schema design, and Redis caching in front of the hot paths.</p>
+              <ul class="list-disc pl-5 grid gap-1.5">
+                <li>Cut p95 on the delivery-tracking feed from <strong>800ms to 250ms</strong> with Redis caching.</li>
+                <li>Shipped token auth and role-based access for partner integrations.</li>
+                <li>Own the service end to end: schema in <code class="font-mono text-[13.5px] bg-inset rounded px-1.5 py-0.5">Postgres</code>, API, cache, deploy.</li>
+              </ul>
+              <p>Open to remote roles only.</p>
+            </div>
+            <div class="mt-3 flex flex-wrap items-center gap-2">
+              <span class="meta-chip">AI-generated</span>
+              <span class="field-hint">Updated 2026-09-22</span>
+            </div>
+          </div>
+        </section>
+
+      </div>
+
+      <aside class="grid gap-5 lg:sticky lg:top-24">
+        <div class="rounded-2xl bg-surface shadow-soft-md p-6">
+          <p class="text-[14px] leading-[1.6] text-body">Hiring for something like this?</p>
+          <a href="hire-search.html" class="btn btn-primary btn-sm press mt-3.5">Run a search <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a>
+        </div>
+      </aside>
+    </div>
+  </div>
+</section>
+
+</main>
+</div>
+</body>
+</html>

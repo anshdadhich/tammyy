@@ -5,7 +5,7 @@ import PageShell from "@/components/PageShell";
 import BeamButton from "@/components/BeamButton";
 import { FaqList, HeroDemo, TraceFill } from "@/components/landing-client";
 import ProcessSteps from "@/components/ProcessSteps";
-import { getViewerRole } from "@/lib/supabase-user";
+import { getViewerRole } from "@/lib/auth-user";
 
 const FAQS = [
   {

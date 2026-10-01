@@ -6,8 +6,8 @@ const csp = [
   "default-src 'self'",
   `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: https://drive.google.com https://lh3.googleusercontent.com https://*.googleusercontent.com https://*.supabase.co",
-  "connect-src 'self' https://drive.google.com https://*.googleusercontent.com https://*.supabase.co",
+  "img-src 'self' data: https://drive.google.com https://lh3.googleusercontent.com https://*.googleusercontent.com",
+  "connect-src 'self' https://drive.google.com https://*.googleusercontent.com",
   "form-action 'self'",
   "frame-ancestors 'none'",
   "base-uri 'self'",
@@ -24,7 +24,6 @@ const nextConfig: NextConfig = {
       { protocol: "https", hostname: "drive.google.com" },
       { protocol: "https", hostname: "lh3.googleusercontent.com" },
       { protocol: "https", hostname: "*.googleusercontent.com" },
-      { protocol: "https", hostname: "*.supabase.co" },
     ],
   },
   async headers() {

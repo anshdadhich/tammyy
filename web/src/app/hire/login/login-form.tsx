@@ -3,150 +3,177 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowRight, CircleAlert, Info, Loader2 } from "lucide-react";
-import { SESSION_EVENT, clearHrSession, clearOwnerSession } from "@/lib/session-client";
+import { ArrowRight, CircleAlert, Eye, EyeOff, Info, Loader2 } from "lucide-react";
+import { SESSION_EVENT, signOut } from "@/lib/session-client";
 
 const EMAIL_OK = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MAX_EMAIL_LEN = 320;
 
-type Session = { name?: string; email: string };
+type Session = {
+  email: string;
+  name?: string;
+  isAdmin?: boolean;
+  employerStatus?: "verified" | "pending" | "none";
+};
+
+/** Flat success payload returned by POST /api/auth/{login,signup}. */
+type AuthSuccess = {
+  ok: true;
+  email: string;
+  kind: "hr" | "anon";
+  isAdmin: boolean;
+  name?: string;
+  employerStatus: "verified" | "pending" | "none";
+};
+
+function passwordPolicyError(password: string): string | null {
+  if (password.length < 8) return "Password must be at least 8 characters.";
+  if (password.length > 200) return "Password must be at most 200 characters.";
+  return null;
+}
 
 export default function LoginForm({
   initialSession,
   bare = false,
-  initialError = null,
 }: {
   initialSession: Session | null;
   bare?: boolean;
-  initialError?: string | null;
 }) {
   const router = useRouter();
   const cardClass = bare
     ? ""
     : "rounded-2xl bg-surface shadow-soft-md p-7 sm:p-9";
+
   const [session, setSession] = useState<Session | null>(initialSession);
-  const [name, setName] = useState("");
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
-  const [code, setCode] = useState("");
-  const [stage, setStage] = useState<"email" | "code" | "company">("email");
-  const [err, setErr] = useState<string | null>(initialError);
-  const [info, setInfo] = useState<string | null>(null);
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [showPw, setShowPw] = useState(false);
+  const [stage, setStage] = useState<"form" | "company">(
+    initialSession && !initialSession.isAdmin && initialSession.employerStatus !== "verified"
+      ? "company"
+      : "form",
+  );
+  const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [company, setCompany] = useState("");
+  const [company, setCompany] = useState(initialSession?.name ?? "");
   const [website, setWebsite] = useState("");
   const [linkedin, setLinkedin] = useState("");
   const [coBusy, setCoBusy] = useState(false);
   const [coErr, setCoErr] = useState<string | null>(null);
-  const [coDone, setCoDone] = useState(false);
+  const [coDone, setCoDone] = useState(initialSession?.employerStatus === "pending");
 
-  const sendCode = async (target: string): Promise<boolean> => {
+  /** Branch on the flat auth payload: admin → /admin, verified → search,
+   *  pending → review card, everything else → company registration. */
+  const applySuccess = (data: AuthSuccess) => {
+    const next: Session = {
+      email: data.email,
+      ...(data.name ? { name: data.name } : {}),
+      ...(data.isAdmin ? { isAdmin: true } : {}),
+      employerStatus: data.employerStatus,
+    };
+    setSession(next);
+    setPassword("");
+    setConfirm("");
     setErr(null);
-    setBusy(true);
-    try {
-      const res = await fetch("/api/auth/otp/request", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email: target, next: "/hire/search" }),
-      });
-      await res.json().catch(() => null);
-      if (!res.ok) {
-        setErr("Could not send the code. Try again.");
-        return false;
-      }
-      setInfo("Check your inbox for the sign-in code — or click the sign-in link in the same email.");
-      return true;
-    } catch {
-      setErr("Could not send the code. Try again.");
-      return false;
-    } finally {
-      setBusy(false);
+    window.dispatchEvent(new Event(SESSION_EVENT));
+    router.refresh();
+    if (data.isAdmin) {
+      router.push("/admin");
+      return;
     }
+    if (data.kind === "hr" && data.employerStatus === "verified") {
+      router.push("/hire/search");
+      return;
+    }
+    if (data.employerStatus === "pending") {
+      setCompany(data.name ?? "");
+      setCoDone(true);
+      return;
+    }
+    // hr with no company yet (or an unclaimed identity) → register one.
+    setStage("company");
   };
 
-  const requestCode = async (ev: React.FormEvent) => {
+  const submitAuth = async (ev: React.FormEvent) => {
     ev.preventDefault();
+    if (busy) return;
     const trimmed = email.trim().toLowerCase();
     if (trimmed.length > MAX_EMAIL_LEN || !EMAIL_OK.test(trimmed)) {
       setErr("Enter a valid work email.");
       return;
     }
-    setEmail(trimmed);
-    const ok = await sendCode(trimmed);
-    if (ok) setStage("code");
-  };
-
-  const verifyCode = async (ev: React.FormEvent) => {
-    ev.preventDefault();
-    const token = code.trim().replace(/\s+/g, "");
-    if (token.length < 6) {
-      setErr("Enter the code from your email.");
+    if (!password) {
+      setErr("Enter your password.");
       return;
     }
+    if (mode === "signup") {
+      const policy = passwordPolicyError(password);
+      if (policy) {
+        setErr(policy);
+        return;
+      }
+      if (password !== confirm) {
+        setErr("Passwords do not match.");
+        return;
+      }
+    }
+    setEmail(trimmed);
     setErr(null);
     setBusy(true);
     try {
-      const res = await fetch("/api/auth/otp/verify", {
+      const res = await fetch(mode === "signup" ? "/api/auth/signup" : "/api/auth/login", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email: email.trim().toLowerCase(), token }),
+        body: JSON.stringify({ email: trimmed, password }),
       });
-      const data = (await res.json().catch(() => null)) as {
-        ok?: unknown;
-        email?: unknown;
-        error?: unknown;
-      } | null;
-      if (!res.ok || !data || typeof data.email !== "string") {
+      const data = (await res.json().catch(() => null)) as
+        | (Partial<AuthSuccess> & { error?: unknown; code?: unknown })
+        | null;
+      if (res.status === 409 && data?.code === "exists") {
+        setMode("signin");
+        setConfirm("");
+        setErr("That email already has an account. Sign in instead.");
+        return;
+      }
+      if (!res.ok || !data?.ok || typeof data.email !== "string") {
         setErr(
           typeof data?.error === "string" && data.error
             ? data.error
-            : "That code did not work. Try again.",
+            : "Could not sign in. Try again.",
         );
         return;
       }
-      const next: Session = {
-        email: data.email,
-        name: name.trim() ? name.trim() : undefined,
-      };
-      const hr = await fetch("/api/session/hr").then((r) => r.json().catch(() => null)) as {
-        email?: unknown;
-      } | null;
-      if (typeof hr?.email === "string" && hr.email.includes("@")) {
-        setSession(next);
-        setInfo(null);
-        setCode("");
-        window.dispatchEvent(new Event(SESSION_EVENT));
-        router.push("/hire/search");
-        router.refresh();
-        return;
-      }
-      setSession(next);
-      setCode("");
-      setErr(null);
-      setInfo(null);
-      setStage("company");
-      window.dispatchEvent(new Event(SESSION_EVENT));
-      router.refresh();
+      applySuccess(data as AuthSuccess);
     } catch {
-      setErr("Could not verify the code. Try again.");
+      setErr("Network error - try again.");
     } finally {
       setBusy(false);
     }
   };
 
-  const signOut = () => {
-    clearHrSession();
-    void clearOwnerSession();
+  const signOutNow = async () => {
+    await signOut();
     setSession(null);
-    setCode("");
-    setStage("email");
+    setMode("signin");
+    setStage("form");
     setErr(null);
-    setInfo(null);
+    setEmail("");
+    setPassword("");
+    setConfirm("");
     setCompany("");
     setWebsite("");
     setLinkedin("");
     setCoErr(null);
     setCoDone(false);
     router.refresh();
+  };
+
+  const toggleMode = () => {
+    setMode((m) => (m === "signin" ? "signup" : "signin"));
+    setErr(null);
+    setConfirm("");
   };
 
   const registerCompany = async (ev: React.FormEvent) => {
@@ -178,6 +205,9 @@ export default function LoginForm({
         );
         return;
       }
+      setSession((s) =>
+        s ? { ...s, name: trimmed, employerStatus: "pending" } : s,
+      );
       setCoDone(true);
       window.dispatchEvent(new Event(SESSION_EVENT));
       router.refresh();
@@ -306,7 +336,7 @@ export default function LoginForm({
           <button
             type="button"
             className="btn btn-secondary press"
-            onClick={() => signOut()}
+            onClick={() => void signOutNow()}
             disabled={busy}
           >
             Sign out
@@ -317,6 +347,9 @@ export default function LoginForm({
   }
 
   if (session) {
+    const heading = session.isAdmin
+      ? "Signed in as Admin"
+      : `Signed in as ${session.name || session.email}`;
     return (
       <div className={cardClass}>
         <div className="flex items-center gap-2.5">
@@ -330,20 +363,26 @@ export default function LoginForm({
           </p>
         </div>
         <h2 className="mt-3 text-[22px] font-semibold tracking-[-0.01em] text-ink">
-          Signed in as {session.name || session.email}
+          {heading}
         </h2>
         <p className="mt-2 text-[15px] leading-[1.6] text-body">
-          {session.name ? session.email : "This device holds the employer session."}{" "}
+          {session.name && !session.isAdmin ? session.email : "This device holds the employer session."}{" "}
           Search, shortlists, and contact channels are unlocked.
         </p>
         <div className="flex flex-wrap items-center gap-3 mt-6">
-          <Link href="/hire/search" className="btn btn-primary press">
-            Start a search <ArrowRight size={16} aria-hidden="true" />
-          </Link>
+          {session.isAdmin ? (
+            <Link href="/admin" className="btn btn-primary press">
+              Open admin <ArrowRight size={16} aria-hidden="true" />
+            </Link>
+          ) : (
+            <Link href="/hire/search" className="btn btn-primary press">
+              Start a search <ArrowRight size={16} aria-hidden="true" />
+            </Link>
+          )}
           <button
             type="button"
             className="btn btn-secondary press"
-            onClick={() => signOut()}
+            onClick={() => void signOutNow()}
             disabled={busy}
           >
             Sign out
@@ -360,106 +399,10 @@ export default function LoginForm({
     );
   }
 
-  if (stage === "code") {
-    return (
-      <form onSubmit={(ev) => void verifyCode(ev)} className={cardClass}>
-        <div className="grid gap-4">
-          <div className="field">
-            <label className="field-label" htmlFor="hr-code">
-              Sign-in code
-              <span className="req" aria-hidden="true">
-                *
-              </span>
-            </label>
-            <input
-              id="hr-code"
-              className="input"
-              value={code}
-              onChange={(e) => {
-                setCode(e.target.value);
-                setErr(null);
-              }}
-              placeholder="123456"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              maxLength={64}
-              aria-invalid={err ? true : undefined}
-              required
-            />
-            {err ? (
-              <span className="field-error" role="alert">
-                {err}
-              </span>
-            ) : (
-              <span className="field-hint">
-                {info ?? `Sent to ${email}. It expires in a few minutes.`}
-              </span>
-            )}
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-3 mt-6">
-          <button
-            type="submit"
-            className="btn btn-primary press"
-            disabled={busy}
-          >
-            {busy ? (
-              <Loader2 size={16} className="animate-spin" aria-hidden="true" />
-            ) : null}
-            Verify and continue <ArrowRight size={16} aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            className="btn btn-secondary press"
-            disabled={busy}
-            onClick={() => void sendCode(email.trim().toLowerCase())}
-          >
-            Resend code
-          </button>
-          <button
-            type="button"
-            className="btn-link"
-            disabled={busy}
-            onClick={() => {
-              setStage("email");
-              setCode("");
-              setErr(null);
-              setInfo(null);
-            }}
-          >
-            Use a different email
-          </button>
-        </div>
-
-        <div className="notice mt-6">
-          <CircleAlert aria-hidden="true" />
-          <span>
-            Only verified employer inboxes can open a session. Codes are
-            single-use and expire quickly.
-          </span>
-        </div>
-      </form>
-    );
-  }
-
+  const isSignup = mode === "signup";
   return (
-    <form onSubmit={(ev) => void requestCode(ev)} className={cardClass}>
+    <form onSubmit={(ev) => void submitAuth(ev)} className={cardClass}>
       <div className="grid gap-4">
-        <div className="field">
-          <label className="field-label" htmlFor="hr-name">
-            Your name
-          </label>
-          <input
-            id="hr-name"
-            className="input"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Optional"
-            maxLength={100}
-          />
-          <span className="field-hint">Optional - it only labels the session.</span>
-        </div>
         <div className="field">
           <label className="field-label" htmlFor="hr-email">
             Work email
@@ -477,20 +420,79 @@ export default function LoginForm({
               setErr(null);
             }}
             placeholder="you@company.com"
-            aria-invalid={err ? true : undefined}
+            autoComplete="email"
+            maxLength={MAX_EMAIL_LEN}
             required
           />
-          {err ? (
-            <span className="field-error" role="alert">
-              {err}
-            </span>
-          ) : (
-            <span className="field-hint">
-              We email you a one-time code - no password in this build.
-            </span>
-          )}
         </div>
+        <div className="field">
+          <label className="field-label" htmlFor="hr-password">
+            Password
+            <span className="req" aria-hidden="true">
+              *
+            </span>
+          </label>
+          <div className="relative">
+            <input
+              id="hr-password"
+              className="input pr-11"
+              type={showPw ? "text" : "password"}
+              value={password}
+              onChange={(e) => {
+                setPassword(e.target.value);
+                setErr(null);
+              }}
+              placeholder={isSignup ? "At least 8 characters" : "Your password"}
+              autoComplete={isSignup ? "new-password" : "current-password"}
+              maxLength={200}
+              aria-invalid={err ? true : undefined}
+              required
+            />
+            <button
+              type="button"
+              className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-muted hover:text-body"
+              onClick={() => setShowPw((v) => !v)}
+              aria-label={showPw ? "Hide password" : "Show password"}
+              tabIndex={-1}
+            >
+              {showPw ? <EyeOff size={16} /> : <Eye size={16} />}
+            </button>
+          </div>
+          {!isSignup && !err ? (
+            <span className="field-hint">Use the password for this account.</span>
+          ) : null}
+        </div>
+        {isSignup ? (
+          <div className="field">
+            <label className="field-label" htmlFor="hr-confirm">
+              Confirm password
+              <span className="req" aria-hidden="true">
+                *
+              </span>
+            </label>
+            <input
+              id="hr-confirm"
+              className="input"
+              type={showPw ? "text" : "password"}
+              value={confirm}
+              onChange={(e) => {
+                setConfirm(e.target.value);
+                setErr(null);
+              }}
+              placeholder="Repeat the password"
+              autoComplete="new-password"
+              maxLength={200}
+              required
+            />
+          </div>
+        ) : null}
       </div>
+
+      {err ? (
+        <p className="field-error mt-4" role="alert">
+          {err}
+        </p>
+      ) : null}
 
       <button
         type="submit"
@@ -500,14 +502,26 @@ export default function LoginForm({
         {busy ? (
           <Loader2 size={16} className="animate-spin" aria-hidden="true" />
         ) : null}
-        Email me a code <ArrowRight size={16} aria-hidden="true" />
+        {isSignup ? "Create account" : "Sign in"} <ArrowRight size={16} aria-hidden="true" />
       </button>
+
+      <p className="field-hint mt-4">
+        {isSignup ? "Already have an account?" : "New to hiring on Tammy?"}{" "}
+        <button
+          type="button"
+          className="underline font-semibold text-body"
+          onClick={toggleMode}
+          disabled={busy}
+        >
+          {isSignup ? "Sign in instead" : "Create an account"}
+        </button>
+      </p>
 
       <div className="notice mt-6">
         <CircleAlert aria-hidden="true" />
         <span>
-          Signing in proves control of the inbox. Only verified employer
-          inboxes unlock search, shortlists, and contact channels.
+          Your password is stored on this server only. Search, shortlists, and
+          contact channels unlock once your company is verified.
         </span>
       </div>
 

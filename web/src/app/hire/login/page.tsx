@@ -10,25 +10,8 @@ export const metadata: Metadata = {
     "Open an employer session on this device - then search the pool, shortlist matches, and see contact channels.",
 };
 
-export default async function HireLoginPage({
-  searchParams,
-}: {
-  searchParams?: Promise<{ error?: string }>;
-}) {
+export default async function HireLoginPage() {
   const session = await readHrSession();
-  const rawError = (await searchParams)?.error ?? null;
-  // Auth redirects forward machine-readable failures here (?error=...);
-  // map them to human copy so raw codes like "invalid_link" never leak
-  // into the form (and long upstream descriptions are capped).
-  const initialError = !rawError
-    ? null
-    : /expir/i.test(rawError)
-      ? "That sign-in link expired. Enter your email below for a fresh one."
-      : /invalid_link/i.test(rawError)
-        ? "That sign-in link didn't work. Enter your email below for a fresh one."
-        : rawError.length > 200
-          ? "That sign-in link did not work. Enter your email below for a fresh one."
-          : rawError;
 
   return (
     <PageShell active="/hire">
@@ -58,11 +41,12 @@ export default async function HireLoginPage({
               First, your login.
             </h1>
             <p className="mt-3 text-[15.5px] leading-[1.6] text-muted">
-              Enter your email to open a session. Search, shortlists, and contact
-              channels unlock on this device - no password in this build.
+              Sign in with your email and password. Search, shortlists, and
+              contact channels unlock on this device once your company is
+              verified.
             </p>
             <div className="mt-6">
-              <LoginForm initialSession={session} initialError={initialError} bare />
+              <LoginForm initialSession={session} bare />
             </div>
           </div>
         </div>

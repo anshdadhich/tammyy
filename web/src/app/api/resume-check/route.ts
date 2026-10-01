@@ -1,5 +1,5 @@
 import { driveFileId } from "@/lib/drive";
-import { getSessionUser } from "@/lib/supabase-user";
+import { getSessionUser } from "@/lib/auth-user";
 import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 const MAX_REDIRECTS = 3;

@@ -6,8 +6,7 @@ import { ArrowRight } from "lucide-react";
 import { applyTheme } from "@/lib/theme";
 import type { Viewer } from "@/lib/api-auth";
 import {
-  clearHrSession,
-  clearOwnerSession,
+  signOut as endSession,
   type ViewerSession,
 } from "@/lib/session-client";
 
@@ -32,8 +31,7 @@ export default function SettingsClient({ initialViewer }: { initialViewer: Viewe
   }, []);
 
   const signOut = async () => {
-    clearHrSession();
-    await clearOwnerSession();
+    await endSession();
     setViewer(null);
   };
 

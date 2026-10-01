@@ -1,9 +1,18 @@
-import { cookies } from "next/headers";
-import { getNavSession, getSessionUser } from "@/lib/supabase-user";
+import { getNavSession, getSessionUser, employerStatusOf } from "@/lib/auth-user";
 import type { ViewerSession } from "@/lib/session-client";
 
-export type HrSession = { name?: string; email: string };
+export type HrSession = {
+  email: string;
+  name?: string;
+  isAdmin?: boolean;
+  employerStatus?: "verified" | "pending" | "none";
+};
 
+/**
+ * HR session for the hire pages. DB failure resolves to null (same as
+ * signed out) — this is an initial-state hint, never an authority: the
+ * client revalidates against /api/auth/me.
+ */
 export async function readHrSession(): Promise<HrSession | null> {
   let session: Awaited<ReturnType<typeof getSessionUser>>;
   try {
@@ -12,9 +21,11 @@ export async function readHrSession(): Promise<HrSession | null> {
     return null;
   }
   if (!session || session.viewer.kind !== "hr") return null;
-  return session.viewer.name
-    ? { email: session.viewer.email, name: session.viewer.name }
-    : { email: session.viewer.email };
+  const out: HrSession = { email: session.viewer.email };
+  if (session.viewer.name) out.name = session.viewer.name;
+  out.isAdmin = session.viewer.isAdmin === true;
+  out.employerStatus = employerStatusOf(session.employer);
+  return out;
 }
 
 /**
@@ -22,23 +33,22 @@ export async function readHrSession(): Promise<HrSession | null> {
  * session from cookies on first render, so the nav can paint the avatar
  * immediately instead of flashing logged-out until client checks finish.
  * The client still revalidates in the background (AppNav) for freshness.
+ *
+ * confirmed semantics: true = the server reached a definitive answer
+ * (signed in, or definitively signed out); false = the lookup failed and
+ * the client must keep its optimistic state instead of flashing Login.
  */
 export async function readNavViewer(): Promise<{ viewer: ViewerSession | null; confirmed: boolean }> {
   let nav: Awaited<ReturnType<typeof getNavSession>>;
   try {
     nav = await getNavSession();
   } catch {
+    // DB failure: unknown, not signed out.
     return { viewer: null, confirmed: false };
   }
   if (!nav) {
-    let hasAuthCookie = false;
-    try {
-      const jar = await cookies();
-      hasAuthCookie = jar.getAll().some((c) => c.name.startsWith("sb-") && c.name.includes("auth-token"));
-    } catch {
-      hasAuthCookie = false;
-    }
-    return { viewer: null, confirmed: !hasAuthCookie };
+    // No session cookie, or the token no longer resolves — definitively out.
+    return { viewer: null, confirmed: true };
   }
   if (nav.role === "employer" || nav.role === "admin") {
     return {

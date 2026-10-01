@@ -1,5 +1,6 @@
-import { supabaseAdmin } from "@/lib/supabase";
+import { randomUUID } from "crypto";
 import { AuthError, requireRole } from "@/lib/auth";
+import { AppDoc, col, Collections } from "@/lib/mongo";
 import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { z } from "zod";
 import { readJsonBody } from "@/lib/http";
@@ -56,7 +57,6 @@ export async function POST(request: Request) {
     return Response.json({ errors: parsed.error.flatten() }, { status: 400 });
   }
   const { employerId, action } = parsed.data;
-  const db = supabaseAdmin();
   if (action === "set_plan") {
     if (!parsed.data.plan || !(parsed.data.plan in PLAN_LIMITS)) {
       return Response.json({ error: "plan must be free, basic, or pro" }, { status: 400 });
@@ -65,27 +65,50 @@ export async function POST(request: Request) {
     if (!ok) return Response.json({ error: "plan update failed" }, { status: 500 });
     return Response.json({ employerId, plan: parsed.data.plan });
   }
-  const { data, error } = await db
-    .from("employers")
-    .update({
-      verification_status: action === "verify" ? "verified" : "rejected",
-    })
-    .eq("id", employerId)
-    .select("id, company_name, verification_status")
-    .single();
-  if (error || !data) {
+  let data: { _id: string; company_name?: string | null; verification_status?: string } | null = null;
+  try {
+    const employers = await col<{
+      _id: string;
+      company_name?: string | null;
+      verification_status?: string;
+    }>(Collections.employers);
+    data = await employers.findOneAndUpdate(
+      { _id: employerId },
+      {
+        $set: {
+          verification_status: action === "verify" ? "verified" : "rejected",
+          updated_at: new Date(),
+        },
+      },
+      {
+        returnDocument: "after",
+        projection: { company_name: 1, verification_status: 1 },
+      },
+    );
+  } catch {
+    data = null;
+  }
+  if (!data) {
     console.error("[admin] employer update failed");
     return Response.json({ error: "employer not found" }, { status: 404 });
   }
+  const employer = {
+    id: data._id,
+    company_name: data.company_name ?? null,
+    verification_status: data.verification_status ?? null,
+  };
 
   try {
-    await db.from("audit_logs").insert({
+    const auditLogs = await col<AppDoc>(Collections.auditLogs);
+    await auditLogs.insertOne({
+      _id: randomUUID(),
       action: action === "verify" ? "employer_verified" : "employer_rejected",
       target_type: "employer",
       target_id: employerId,
-      metadata: { company_name: (data as { company_name?: string })?.company_name ?? null },
+      metadata: { company_name: employer.company_name },
+      created_at: new Date(),
     });
   } catch {
   }
-  return Response.json({ employer: data });
+  return Response.json({ employer });
 }

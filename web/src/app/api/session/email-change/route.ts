@@ -1,9 +1,9 @@
 import { z } from "zod";
 import { issueEmailChangeToken } from "@/lib/api-auth";
-import { getSessionUser, requireOwnerDb } from "@/lib/supabase-user";
+import { getSessionUser, requireOwnerDb } from "@/lib/auth-user";
 import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { normalizeEmail } from "@/lib/validators";
-import { supabaseAdmin } from "@/lib/supabase";
+import { AppDoc, col, Collections } from "@/lib/mongo";
 import { readJsonBody } from "@/lib/http";
 
 const bodySchema = z.object({
@@ -36,18 +36,30 @@ export async function POST(request: Request) {
   if (!newEmail || newEmail.length > 320) {
     return Response.json({ error: "Enter a valid email." }, { status: 400 });
   }
-  const db = supabaseAdmin();
-  const { data: row } = await db
-    .from("candidates")
-    .select("contact_email")
-    .eq("id", parsed.data.id)
-    .maybeSingle();
-  const current = normalizeEmail((row as { contact_email?: unknown } | null)?.contact_email ?? "");
+  let current = "";
+  try {
+    const candidates = await col<{ _id: string; contact_email?: string | null }>(
+      Collections.candidates,
+    );
+    const row = await candidates.findOne(
+      { _id: parsed.data.id },
+      { projection: { contact_email: 1 } },
+    );
+    current = normalizeEmail(row?.contact_email ?? "");
+  } catch {
+    current = "";
+  }
   if (!newEmail || newEmail === current) {
     return Response.json({ error: "That is already the email on this profile." }, { status: 400 });
   }
-  const clash = await db.from("users").select("id").eq("email", newEmail).maybeSingle();
-  if ((clash.data as { id: string } | null)?.id) {
+  let clash: AppDoc | null = null;
+  try {
+    const users = await col<AppDoc>(Collections.users);
+    clash = await users.findOne({ email: newEmail }, { projection: { _id: 1 } });
+  } catch {
+    clash = null;
+  }
+  if (clash?._id) {
     return Response.json({ error: "That email is already in use." }, { status: 409 });
   }
   const token = issueEmailChangeToken(parsed.data.id, newEmail);

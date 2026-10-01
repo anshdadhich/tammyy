@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { inngest } from "@/lib/inngest";
-import { supabaseAdmin } from "@/lib/supabase";
+import { AppDoc, col, Collections } from "@/lib/mongo";
 import { guardOwnerAuth } from "@/lib/api-auth";
 import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { readJsonBody } from "@/lib/http";
@@ -19,12 +19,13 @@ export async function POST(request: Request) {
   }
   const denied = await guardOwnerAuth(request, parsed.data.id);
   if (denied) return denied;
-  const db = supabaseAdmin();
-  const { data: existing } = await db
-    .from("candidates")
-    .select("id")
-    .eq("id", parsed.data.id)
-    .maybeSingle();
+  let existing: { _id: string } | null = null;
+  try {
+    const candidates = await col<AppDoc>(Collections.candidates);
+    existing = await candidates.findOne({ _id: parsed.data.id }, { projection: { _id: 1 } });
+  } catch {
+    existing = null;
+  }
   if (!existing) return Response.json({ error: "candidate not found" }, { status: 404 });
   try {
     await inngest.send({ name: "candidate.profile.submitted", data: { candidateId: parsed.data.id } });

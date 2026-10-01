@@ -4,29 +4,33 @@ Candidates create one deep profile once. Employers search with AI understanding
 (not keywords) and see best matches with contact directly (open-contact model:
 no unlock gate; `contact_log` is audit-only).
 
-Monorepo layout: `web/` (Next.js app: portfolio pages + HR search + JSON API) + `supabase/` (SQL) + `docs/` (blueprint).
+Monorepo layout: `web/` (Next.js app: portfolio pages + HR search + JSON API) + `docs/` (blueprint).
+
+Data + auth live in MongoDB (no external services): email + password login with
+scrypt-hashed passwords and an httpOnly `tammy_session` cookie resolved against
+the `sessions` collection.
 
 The app includes the candidate profile flow, employer search, admin verification, and JSON API. Current UI routes are listed in `web/README.md`; route files under `web/src/app/` are the source of truth.
 
 ## Quickstart
 
-### 1. Supabase SQL - run in this order (SQL Editor)
+### 1. MongoDB
 
-1. `supabase/schema.sql` - tables, indexes, RLS
-2. `supabase/seed_skills.sql` - ~40 canonical skills
-3. `supabase/match_chunks.sql` - `match_chunks` RPC for vector search
-4. `supabase/seed_demo.sql` - 6 demo candidates + 2 jobs + zero-vector chunks
-   (lets search/API work with no Voyage key; real pipeline overwrites vectors)
-5. `supabase/oss_contributions.sql` - open source contributions table + RLS
-   (required for the Open Source profile section; safe to re-run anytime)
+Start a local MongoDB (8.x) — no schema to run; collections are created on demand:
 
-Requires extensions: `vector`, `pg_trgm`, `unaccent`, `pgcrypto` (created by schema.sql).
+- `MONGODB_URI` defaults to `mongodb://127.0.0.1:27017`
+- `MONGODB_DB` defaults to `tammy`
+
+Optional demo data (canonical skills + demo candidates so search works without a Voyage key):
+
+```bash
+cd web
+node scripts/seed-mongo.mjs
+```
 
 ### 2. Env vars (names only - copy `web/.env.example` to `web/.env.local`)
 
-- `NEXT_PUBLIC_SUPABASE_URL`
-- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-- `SUPABASE_SERVICE_ROLE_KEY`
+- `MONGODB_URI`, `MONGODB_DB` (optional - defaults work locally)
 - `VOYAGE_API_KEY`
 - `OPENROUTER_API_KEY`
 - `JUDGE_MODEL`
@@ -34,6 +38,8 @@ Requires extensions: `vector`, `pg_trgm`, `unaccent`, `pgcrypto` (created by sch
 - `INNGEST_SIGNING_KEY`
 - `RESEND_API_KEY` (optional - email sends are graceful no-ops without it)
 - `RESEND_FROM` (optional - defaults to Resend onboarding sender)
+- `SESSION_SECRET` (recommended on prod - signs lookup/email-change tokens)
+- `BOOTSTRAP_SECRET` (recommended on prod - locks `/api/admin/bootstrap`)
 - `NEXT_PUBLIC_SITE_URL` (optional - used in email links)
 
 ### 3. Run the app
@@ -44,7 +50,7 @@ npm install
 npm run dev        # http://localhost:3000
 ```
 
-Pages include `/`, `/join`, `/talent/[id]`, `/hire`, `/hire/login`, `/hire/search`, `/admin`, `/settings`, and `/auth/confirm`.
+Pages include `/`, `/join`, `/talent/[id]`, `/hire`, `/hire/login`, `/hire/search`, `/admin`, `/settings`.
 
 ### 4. Inngest dev (background pipeline: normalize → summary → depth → chunks → embed)
 
@@ -77,9 +83,11 @@ Checks `GET /` → 200 and expected unauthenticated API responses.
 
 All email sends are wrapped in try/catch - missing `RESEND_API_KEY` never breaks an API response.
 
-## Deploy notes (Vercel + Supabase)
+## Deploy notes (Vercel + MongoDB)
 
-- Supabase: create project → run SQL in order: `schema.sql` → `storage.sql` → `contact_prefs.sql` → `seed_skills.sql` → `match_chunks.sql` → `migrations/20260923_hardening.sql` → `migrations/20260928_role_guard.sql` → `migrations/20260928_contact_email_idx.sql` → `migrations/20260929_quotas.sql` → `migrations/20260929_employer_linkedin.sql` → `migrations/20260930_drop_legacy_trigger.sql` → enable Auth (Email + OTP) → add Storage buckets if needed.
-- Vercel: import `web/` as the project root, set all env vars above (server: `SUPABASE_SERVICE_ROLE_KEY`, `VOYAGE_API_KEY`, `OPENROUTER_API_KEY`, `RESEND_API_KEY`; public: `NEXT_PUBLIC_SUPABASE_*`), deploy. Prod hardening: HR verification is fail-closed by default (no flag needed) + set `BOOTSTRAP_SECRET` (locks `/api/admin/bootstrap`).
+- MongoDB: create a cluster (e.g. MongoDB Atlas) → set `MONGODB_URI` / `MONGODB_DB`. Auth indexes (unique `users.email`, sessions TTL) are created automatically on first login.
+- Vercel: import `web/` as the project root, set all env vars above (server: `MONGODB_URI`, `VOYAGE_API_KEY`, `OPENROUTER_API_KEY`, `RESEND_API_KEY`, `SESSION_SECRET`, `BOOTSTRAP_SECRET`), deploy. Prod hardening: HR verification is fail-closed by default (no flag needed) + set `BOOTSTRAP_SECRET` (locks `/api/admin/bootstrap`).
+- Admin bootstrap: sign up first, then `POST /api/admin/bootstrap` with the bootstrap secret to promote your account to admin.
 - Inngest: create an Inngest project, set `INNGEST_EVENT_KEY` / `INNGEST_SIGNING_KEY` in Vercel, point Inngest to `https://<app>/api/webhooks/inngest` as the serving endpoint.
-- Post-deploy: re-run `seed_demo.sql` only for staging; never on prod (demo `@demo.local` rows).
+- File uploads are stored on local disk (`STORAGE_DIR`, default `<project>/storage`) — mount a persistent volume or swap `lib/storage.ts` for object storage when moving beyond a single instance.
+- Seeding: run `node scripts/seed-mongo.mjs` only for staging; never on prod (demo `@demo.local` rows).

@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Employer login · Tammy</title>
+<meta name="description" content="Open an employer session on this device - then search the pool, shortlist matches, and see contact channels.">
+<script>(function(){try{var t=localStorage.getItem("tammy_theme");var d=t==="dark"||(t===null&&window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.setAttribute("data-theme",d?"dark":"light")}catch(e){}})()</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@100..900&family=Geist:wght@100..900&display=swap" rel="stylesheet">
+<style>:root{--font-geist-sans:"Geist";--font-geist-mono:"Geist Mono"}</style>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="relative min-h-screen bg-paper text-body antialiased selection:bg-brand selection:text-on-brand">
+<a href="#main-content" class="skip-link">Skip to content</a>
+<header class="site-navbar-wrap">
+  <div class="site-navbar !px-[max(24px,calc((100%_-_1160px)/2))]">
+    <a href="index.html" class="site-brand site-brand-text">Tammy</a>
+    <nav aria-label="Main navigation" class="site-navigation hidden lg:flex">
+      <div class="site-nav-links">
+        <a href="index.html" class="site-nav-link press" style="position: relative">
+          <span style="position: relative">Home</span>
+        </a>
+        <a href="hire.html" class="site-nav-link press is-active" style="position: relative" aria-current="page">
+          <span class="site-nav-pill"></span>
+          <span style="position: relative">Hiring</span>
+        </a>
+      </div>
+    </nav>
+    <div class="site-nav-actions">
+      <button type="button" class="theme-toggle press" aria-label="Toggle color theme" title="Toggle light / dark theme">
+        <svg class="theme-icon-sun" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+        <svg class="theme-icon-moon" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+      </button>
+      <div class="nav-menu-wrap">
+        <button type="button" class="site-nav-cta press h-10" aria-haspopup="menu" aria-expanded="false">Login / Sign up</button>
+      </div>
+      <button type="button" class="site-nav-burger lg:hidden press" aria-expanded="false" aria-label="Open menu">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+<main id="main-content">
+
+<section class="relative overflow-hidden pt-14 pb-24 lg:pt-20">
+  <div class="bg-dither" aria-hidden="true">
+    <canvas class="dither-soft" data-dither style="display: block; width: 100%; height: 100%; image-rendering: pixelated; pointer-events: none"></canvas>
+  </div>
+  <div class="relative max-w-[1160px] mx-auto px-6">
+    <div class="rise mx-auto w-full max-w-xl rounded-2xl bg-surface shadow-soft-md p-7 sm:p-9" style="--d: 80ms">
+      <p class="flex items-center gap-2.5 font-mono text-[12.5px] font-medium text-brand-text">
+        <span aria-hidden="true" class="inline-block h-[2px] w-6" style="background: var(--brand)"></span>
+        Hire login
+      </p>
+      <h1 class="mt-4 text-[clamp(1.9rem,3.4vw,2.5rem)] font-semibold tracking-[-0.02em] leading-[1.08] text-ink">First, your login.</h1>
+      <p class="mt-3 text-[15.5px] leading-[1.6] text-muted">Sign in with your email and password. Search, shortlists, and contact channels unlock on this device once your company is verified.</p>
+      <div class="mt-6">
+        <form>
+          <div class="grid gap-4">
+            <div class="field">
+              <label class="field-label" for="hr-email">Work email <span class="req" aria-hidden="true">*</span></label>
+              <input id="hr-email" class="input" type="email" value="" placeholder="you@company.com" autocomplete="email" maxlength="320" required>
+            </div>
+            <div class="field">
+              <label class="field-label" for="hr-password">Password <span class="req" aria-hidden="true">*</span></label>
+              <div class="relative">
+                <input id="hr-password" class="input pr-11" type="password" value="" placeholder="Your password" autocomplete="current-password" maxlength="200" required>
+                <button type="button" class="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-muted hover:text-body" aria-label="Show password" tabindex="-1">
+                  <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
+              </div>
+              <span class="field-hint">Use the password for this account.</span>
+            </div>
+          </div>
+
+          <button type="submit" class="btn btn-primary press mt-6 w-full sm:w-auto">Sign in <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></button>
+
+          <p class="field-hint mt-4">New to hiring on Tammy? <button type="button" class="underline font-semibold text-body">Create an account</button></p>
+
+          <div class="notice mt-6">
+            <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>
+            <span>Your password is stored on this server only. Search, shortlists, and contact channels unlock once your company is verified.</span>
+          </div>
+
+          <p class="field-hint mt-4">Hiring for the first time? <a href="hire.html" class="underline font-semibold text-body">See how the search works</a>.</p>
+        </form>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+</div>
+<script>
+// Vanilla port of web/src/components/DitherEffect.tsx (WebGL simplex-noise +
+// Bayer ordered dither) for the static export. Activates every
+// <canvas data-dither> on the page. Same shaders, same lifecycle behaviour:
+// 0.5x backbuffer + pixelated upscale, theme-aware colors, reduced-motion
+// static frame, visibility/intersection pausing.
+(function () {
+  var VERT = "attribute vec3 aPosition;\nvoid main() {\n  vec4 pos = vec4(aPosition, 1.0);\n  pos.xy = pos.xy * 2.0 - 1.0;\n  gl_Position = pos;\n}";
+
+  var FRAG = [
+    "precision highp float;",
+    "uniform vec2 u_resolution;",
+    "uniform float u_time;",
+    "uniform float uScale;",
+    "uniform vec3 u_colorFront;",
+    "uniform vec3 u_colorBack;",
+    "vec4 permute(vec4 x){return mod(((x*34.0)+1.0)*x,289.0);}",
+    "vec4 taylorInvSqrt(vec4 r){return 1.79284291400159 - 0.85373472095314 * r;}",
+    "float snoise(vec3 v){",
+    "  const vec2 C = vec2(1.0/6.0,1.0/3.0);",
+    "  const vec4 D = vec4(0.0,0.5,1.0,2.0);",
+    "  vec3 i = floor(v + dot(v,C.yyy));",
+    "  vec3 x0 = v - i + dot(i,C.xxx);",
+    "  vec3 g = step(x0.yzx, x0.xyz);",
+    "  vec3 l = 1.0 - g;",
+    "  vec3 i1 = min(g.xyz, l.zxy);",
+    "  vec3 i2 = max(g.xyz, l.zxy);",
+    "  vec3 x1 = x0 - i1 + C.xxx;",
+    "  vec3 x2 = x0 - i2 + C.yyy;",
+    "  vec3 x3 = x0 - D.yyy;",
+    "  i = mod(i,289.0);",
+    "  vec4 p = permute(permute(permute(",
+    "    i.z + vec4(0.0,i1.z,i2.z,1.0))",
+    "    + i.y + vec4(0.0,i1.y,i2.y,1.0))",
+    "    + i.x + vec4(0.0,i1.x,i2.x,1.0));",
+    "  float n_ = 0.142857142857;",
+    "  vec3 ns = n_ * D.wyz - D.xzx;",
+    "  vec4 j = p - 49.0 * floor(p * ns.z * ns.z);",
+    "  vec4 x_ = floor(j * ns.z);",
+    "  vec4 y_ = floor(j - 7.0 * x_);",
+    "  vec4 x = x_ *ns.x + ns.yyyy;",
+    "  vec4 y = y_ *ns.x + ns.yyyy;",
+    "  vec4 h = 1.0 - abs(x) - abs(y);",
+    "  vec4 b0 = vec4(x.xy, y.xy);",
+    "  vec4 b1 = vec4(x.zw, y.zw);",
+    "  vec4 s0 = floor(b0) * 2.0 + 1.0;",
+    "  vec4 s1 = floor(b1) * 2.0 + 1.0;",
+    "  vec4 sh = -step(h, vec4(0.0));",
+    "  vec4 a0 = b0.xzyw + s0.xzyw * sh.xxyy;",
+    "  vec4 a1 = b1.xzyw + s1.xzyw * sh.zzww;",
+    "  vec3 p0 = vec3(a0.xy, h.x);",
+    "  vec3 p1 = vec3(a0.zw, h.y);",
+    "  vec3 p2 = vec3(a1.xy, h.z);",
+    "  vec3 p3 = vec3(a1.zw, h.w);",
+    "  vec4 norm = taylorInvSqrt(vec4(dot(p0, p0), dot(p1, p1), dot(p2, p2), dot(p3, p3)));",
+    "  p0 *= norm.x;",
+    "  p1 *= norm.y;",
+    "  p2 *= norm.z;",
+    "  p3 *= norm.w;",
+    "  vec4 m = max(0.6 - vec4(dot(x0, x0), dot(x1, x1), dot(x2, x2), dot(x3, x3)), 0.0);",
+    "  m = m * m;",
+    "  return 42.0 * dot(m*m, vec4(dot(p0, x0), dot(p1, x1), dot(p2, x2), dot(p3, x3)));",
+    "}",
+    "float Bayer2(vec2 a) {",
+    "  a = floor(a);",
+    "  return fract(a.x / 2.0 + a.y * a.y * 0.75);",
+    "}",
+    "#define Bayer4(a)  (Bayer2(0.5*(a))*0.25 + Bayer2(a))",
+    "#define Bayer8(a)  (Bayer4(0.5*(a))*0.25 + Bayer2(a))",
+    "#define Bayer16(a) (Bayer8(0.5*(a))*0.25 + Bayer2(a))",
+    "#define Bayer32(a) (Bayer16(0.5*(a))*0.25 + Bayer2(a))",
+    "void main() {",
+    "  vec2 uv = gl_FragCoord.xy / u_resolution;",
+    "  uv.x *= u_resolution.x / u_resolution.y;",
+    "  float t = u_time * 0.35;",
+    "  float n1 = snoise(vec3(uv * 1.5, t));",
+    "  float n2 = snoise(vec3(uv * 1.5 + 4.0, t * 1.1));",
+    "  float gray = mix(n1, n2, 0.5) * 0.5 + 0.5;",
+    "  float d = step(Bayer32(gl_FragCoord.xy * uScale), gray);",
+    "  vec3 finalColor = mix(u_colorFront, u_colorBack, d);",
+    "  gl_FragColor = vec4(finalColor, 1.0);",
+    "}",
+  ].join("\n");
+
+  var STATIC_FRAME_T = 6;
+
+  function hexToRgb(hex) {
+    hex = hex.replace(/^#/, "");
+    if (hex.length === 3)
+      hex = hex.split("").map(function (c) { return c + c; }).join("");
+    return [
+      parseInt(hex.slice(0, 2), 16) / 255,
+      parseInt(hex.slice(2, 4), 16) / 255,
+      parseInt(hex.slice(4, 6), 16) / 255,
+    ];
+  }
+
+  function compileShader(gl, type, src) {
+    var s = gl.createShader(type);
+    if (!s) return null;
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error("DitherEffect shader error:", gl.getShaderInfoLog(s));
+      gl.deleteShader(s);
+      return null;
+    }
+    return s;
+  }
+
+  function createProgram(gl, vsSrc, fsSrc) {
+    var vs = compileShader(gl, gl.VERTEX_SHADER, vsSrc);
+    var fs = compileShader(gl, gl.FRAGMENT_SHADER, fsSrc);
+    if (!vs || !fs) return null;
+    var prog = gl.createProgram();
+    if (!prog) return null;
+    gl.attachShader(prog, vs);
+    gl.attachShader(prog, fs);
+    gl.linkProgram(prog);
+    gl.detachShader(prog, vs);
+    gl.detachShader(prog, fs);
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      console.error("DitherEffect link error:", gl.getProgramInfoLog(prog));
+      gl.deleteProgram(prog);
+      return null;
+    }
+    return prog;
+  }
+
+  function init(canvas) {
+    var scale = parseFloat(canvas.getAttribute("data-scale") || "0.8");
+    var speed = parseFloat(canvas.getAttribute("data-speed") || "1");
+    var colorFront = canvas.getAttribute("data-front") || "#1F2DE6";
+    var colorBack = canvas.getAttribute("data-back") || "#ffffff";
+
+    var gl = canvas.getContext("webgl", { alpha: false });
+    if (!gl) return;
+
+    var prog = createProgram(gl, VERT, FRAG);
+    if (!prog) return;
+
+    var buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 1, 0]),
+      gl.STATIC_DRAW
+    );
+
+    var aPos = gl.getAttribLocation(prog, "aPosition");
+    gl.enableVertexAttribArray(aPos);
+    gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 12, 0);
+
+    var uRes = gl.getUniformLocation(prog, "u_resolution");
+    var uTime = gl.getUniformLocation(prog, "u_time");
+    var uScale = gl.getUniformLocation(prog, "uScale");
+    var uFront = gl.getUniformLocation(prog, "u_colorFront");
+    var uBack = gl.getUniformLocation(prog, "u_colorBack");
+
+    var startTime = performance.now();
+    var reduceMotion = false;
+    try {
+      reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    } catch (e) {}
+
+    var paused = document.hidden;
+    var inView = true;
+    var frameQueued = false;
+    var colors = { front: hexToRgb(colorFront), back: hexToRgb(colorBack) };
+
+    function scheduleFrame() {
+      if (frameQueued || paused || !inView) return;
+      frameQueued = true;
+      requestAnimationFrame(render);
+    }
+
+    function render(now) {
+      frameQueued = false;
+      if (paused || !inView) return;
+      var t = reduceMotion ? STATIC_FRAME_T : ((now - startTime) / 1000) * speed;
+      gl.useProgram(prog);
+      gl.uniform2f(uRes, canvas.width, canvas.height);
+      gl.uniform1f(uTime, t);
+      gl.uniform1f(uScale, scale);
+      gl.uniform3fv(uFront, colors.front);
+      gl.uniform3fv(uBack, colors.back);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+      if (!reduceMotion) scheduleFrame();
+    }
+
+    function applyColors() {
+      var isDark = false;
+      try {
+        isDark = document.documentElement.getAttribute("data-theme") === "dark";
+      } catch (e) {}
+      colors = isDark
+        ? { front: hexToRgb("#2B3BF0"), back: hexToRgb("#141419") }
+        : { front: hexToRgb(colorFront), back: hexToRgb(colorBack) };
+    }
+    applyColors();
+    try {
+      new MutationObserver(function () {
+        applyColors();
+        scheduleFrame();
+      }).observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ["data-theme"],
+      });
+    } catch (e) {}
+
+    function resize() {
+      var rect = canvas.getBoundingClientRect();
+      canvas.width = Math.max(1, Math.floor(rect.width * 0.5));
+      canvas.height = Math.max(1, Math.floor(rect.height * 0.5));
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      scheduleFrame();
+    }
+    resize();
+    window.addEventListener("resize", resize);
+
+    document.addEventListener("visibilitychange", function () {
+      paused = document.hidden;
+      if (!paused) scheduleFrame();
+    });
+
+    if ("IntersectionObserver" in window) {
+      new IntersectionObserver(function (entries) {
+        inView = entries[0] ? entries[0].isIntersecting : true;
+        if (inView) scheduleFrame();
+      }).observe(canvas);
+    }
+
+    scheduleFrame();
+  }
+
+  var canvases = document.querySelectorAll("canvas[data-dither]");
+  for (var i = 0; i < canvases.length; i++) init(canvases[i]);
+})();
+</script>
+</body>
+</html>

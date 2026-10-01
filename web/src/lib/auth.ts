@@ -1,4 +1,4 @@
-import { getSessionUser } from "./supabase-user";
+import { getSessionUser } from "./auth-user";
 
 export type Role = "candidate" | "employer" | "admin";
 

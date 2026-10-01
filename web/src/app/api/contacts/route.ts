@@ -1,9 +1,10 @@
 import { z } from "zod";
+import { createHash, randomUUID } from "node:crypto";
 import { after } from "next/server";
-import { createHash } from "node:crypto";
-import { supabaseAdmin } from "@/lib/supabase";
+import type { Db, Filter } from "mongodb";
+import { AppDoc, col, Collections } from "@/lib/mongo";
 import { contactLoggedEmail, sendEmail } from "@/lib/email";
-import { requireHrDb, requireOwnerDb, getSessionUser } from "@/lib/supabase-user";
+import { requireHrDb, requireOwnerDb, getSessionUser } from "@/lib/auth-user";
 import { rateLimit, rateLimitRoute } from "@/lib/rate-limit";
 import { startWideEvent } from "@/lib/observe";
 import { withTimeout } from "@/lib/timeout";
@@ -28,20 +29,129 @@ const listQuery = z.object({
 
 const AUDIT_ACTIONS = ["search", "profile_view", "contact", "shortlist", "export", "profile_update", "upload"] as const;
 
-type Db = ReturnType<typeof supabaseAdmin>;
+/** `contact_log` row (Postgres columns kept verbatim, `_id` = former `id`). */
+type ContactLogDoc = {
+  _id: string;
+  employer_id: string | null;
+  candidate_id: string | null;
+  job_id: string | null;
+  channel: string;
+  message: string | null;
+  created_at: Date | string;
+};
+
+type JobDoc = { _id: string; employer_id: string | null; title?: string | null };
+
+type CandidateDoc = {
+  _id: string;
+  full_name?: string | null;
+  contact_email?: string | null;
+};
+
+const CONTACT_PROJECTION = {
+  employer_id: 1,
+  candidate_id: 1,
+  job_id: 1,
+  channel: 1,
+  message: 1,
+  created_at: 1,
+} as const;
+
+type WideEvent = ReturnType<typeof startWideEvent>;
+
+function isoOf(v: Date | string): string {
+  return v instanceof Date ? v.toISOString() : new Date(v).toISOString();
+}
+
+function serializeContactLog(r: ContactLogDoc): Record<string, unknown> {
+  return {
+    id: r._id,
+    employer_id: r.employer_id ?? null,
+    candidate_id: r.candidate_id ?? null,
+    job_id: r.job_id ?? null,
+    channel: r.channel,
+    message: r.message ?? null,
+    created_at: r.created_at,
+  };
+}
 
 function messageHash(channel: string, message: string): string {
   return createHash("sha256").update(`${channel}|${message}`, "utf8").digest("hex");
 }
 
 async function auditBestEffort(
-  db: Db,
   row: { action: string; target_type: string; target_id: string | null; metadata: Record<string, unknown> },
 ): Promise<void> {
   if (!(AUDIT_ACTIONS as readonly string[]).includes(row.action)) return;
   try {
-    await db.from("audit_logs").insert(row);
+    const auditLogs = await col<AppDoc>(Collections.auditLogs);
+    await auditLogs.insertOne({ _id: randomUUID(), ...row, created_at: new Date() });
   } catch {}
+}
+
+type ListOutcome =
+  | { kind: "ok"; rows: ContactLogDoc[] }
+  | { kind: "invalid-cursor" }
+  | { kind: "failed" };
+
+/** Shared list query for the owner and HR branches of GET. */
+async function runContactList(
+  db: Db,
+  filter: Filter<ContactLogDoc>,
+  page: { cursor?: string | undefined; offset?: number | undefined },
+  pageSize: number,
+): Promise<ListOutcome> {
+  if (page.cursor) {
+    const c = decodeCursor(page.cursor);
+    if (!c) return { kind: "invalid-cursor" };
+    filter.$or = [
+      { created_at: { $lt: new Date(c.createdAt) } },
+      { created_at: new Date(c.createdAt), _id: { $lt: c.id } },
+    ];
+  }
+  try {
+    const contactLog = db.collection<ContactLogDoc>(Collections.contactLog);
+    let q = contactLog
+      .find(filter, { projection: CONTACT_PROJECTION })
+      .sort({ created_at: -1, _id: -1 });
+    if (page.cursor) {
+      q = q.limit(pageSize + 1);
+    } else if (page.offset !== undefined) {
+      q = q.skip(page.offset).limit(pageSize + 1);
+    } else {
+      q = q.limit(pageSize + 1);
+    }
+    return { kind: "ok", rows: await q.toArray() };
+  } catch {
+    return { kind: "failed" };
+  }
+}
+
+function respondContactList(
+  wev: WideEvent,
+  rows: ContactLogDoc[],
+  pageSize: number,
+): Response {
+  const page = rows.slice(0, pageSize);
+  const nextCursor =
+    rows.length > pageSize
+      ? encodeCursor(isoOf(rows[pageSize - 1].created_at), rows[pageSize - 1]._id)
+      : null;
+  wev.add({ degraded: false });
+  wev.end({ status: 200 });
+  return Response.json({ results: page.map(serializeContactLog), nextCursor, degraded: false });
+}
+
+function listFailure(wev: WideEvent): Response {
+  console.error("[contacts] list failed");
+  wev.add({ degraded: true });
+  wev.end({ status: 500, error: "contact list failed" });
+  return Response.json({ error: "contact list failed" }, { status: 500 });
+}
+
+function invalidCursor(wev: WideEvent): Response {
+  wev.end({ status: 400 });
+  return Response.json({ error: "Invalid cursor." }, { status: 400 });
 }
 
 export async function POST(request: Request) {
@@ -73,8 +183,6 @@ export async function POST(request: Request) {
     wev.end({ status: hr.status });
     return hr;
   }
-  const checks = supabaseAdmin();
-  const db = hr.client;
   const employerId = hr.employerId;
   const { candidate_id, job_id, channel, message } = parsed.data;
 
@@ -95,18 +203,29 @@ export async function POST(request: Request) {
     );
   }
 
-  const [candRes, jobRes] = await Promise.all([
-    checks.from("candidates").select("id").eq("id", candidate_id).maybeSingle(),
-    job_id
-      ? checks.from("jobs").select("id, employer_id").eq("id", job_id).maybeSingle()
-      : Promise.resolve({ data: null }),
-  ]);
-  if (!candRes.data) {
+  // Existence checks; a read failure falls into the same branches the old
+  // `.maybeSingle()` error→null paths took.
+  let candRow: { _id: string } | null = null;
+  let jobRow: JobDoc | null = null;
+  try {
+    const candidates = await col<{ _id: string }>(Collections.candidates);
+    const jobs = await col<JobDoc>(Collections.jobs);
+    [candRow, jobRow] = await Promise.all([
+      candidates.findOne({ _id: candidate_id }, { projection: { _id: 1 } }),
+      job_id
+        ? jobs.findOne({ _id: job_id }, { projection: { employer_id: 1 } })
+        : Promise.resolve(null),
+    ]);
+  } catch {
+    candRow = null;
+    jobRow = null;
+  }
+  if (!candRow) {
     wev.end({ status: 404 });
     return Response.json({ error: "candidate not found" }, { status: 404 });
   }
   if (job_id) {
-    const job = jobRes.data as { id: string; employer_id: string | null } | null;
+    const job = jobRow;
     if (!job) {
       wev.end({ status: 404 });
       return Response.json({ error: "job not found" }, { status: 404 });
@@ -117,40 +236,53 @@ export async function POST(request: Request) {
     }
   }
 
-  const windowStart = new Date(Date.now() - IDEMPOTENCY_WINDOW_MS).toISOString();
-  let recentQuery = db
-    .from("contact_log")
-    .select("id, channel, message, job_id, created_at")
-    .eq("employer_id", employerId)
-    .eq("candidate_id", candidate_id)
-    .gte("created_at", windowStart)
-    .order("created_at", { ascending: false })
-    .limit(20);
-  recentQuery = job_id ? recentQuery.eq("job_id", job_id) : recentQuery.is("job_id", null);
-  const { data: recent } = await recentQuery;
+  // Idempotency window: recent identical messages dedupe to the old row.
+  const windowStart = new Date(Date.now() - IDEMPOTENCY_WINDOW_MS);
+  let recent: ContactLogDoc[] = [];
+  try {
+    const contactLog = await col<ContactLogDoc>(Collections.contactLog);
+    recent = await contactLog
+      .find(
+        {
+          employer_id: employerId,
+          candidate_id,
+          job_id: job_id ?? null,
+          created_at: { $gte: windowStart },
+        },
+        { projection: { channel: 1, message: 1, job_id: 1, created_at: 1 } },
+      )
+      .sort({ created_at: -1 })
+      .limit(20)
+      .toArray();
+  } catch {
+    recent = [];
+  }
   const incoming = messageHash(channel, message || "");
-  const dupe = ((recent ?? []) as { id: string; channel: string; message: string | null }[]).find(
-    (r) => messageHash(r.channel, r.message ?? "") === incoming,
-  );
+  const dupe = recent.find((r) => messageHash(r.channel, r.message ?? "") === incoming);
   if (dupe) {
     wev.add({ degraded: false });
     wev.end({ status: 200 });
-    return Response.json({ id: dupe.id, status: "logged", deduped: true });
+    return Response.json({ id: dupe._id, status: "logged", deduped: true });
   }
 
-  const { data } = await db
-    .from("contact_log")
-    .insert({
+  let contactId: string | null = null;
+  try {
+    const contactLog = await col<ContactLogDoc>(Collections.contactLog);
+    const res = await contactLog.insertOne({
+      _id: randomUUID(),
       employer_id: employerId,
       candidate_id,
       job_id: job_id ?? null,
       channel,
       message: message || null,
-    })
-    .select("id")
-    .single();
+      created_at: new Date(),
+    });
+    contactId = res.insertedId;
+  } catch {
+    contactId = null;
+  }
 
-  if (!data) {
+  if (!contactId) {
     console.error("[contacts] log failed");
     wev.add({ degraded: true });
     wev.end({ status: 500, error: "contact log failed" });
@@ -159,8 +291,7 @@ export async function POST(request: Request) {
       { status: 500 },
     );
   }
-  const contactId = (data as { id: string }).id;
-  await auditBestEffort(db, {
+  await auditBestEffort({
     action: "contact",
     target_type: "contact",
     target_id: contactId,
@@ -170,26 +301,32 @@ export async function POST(request: Request) {
   after(async () => {
     const bg = startWideEvent("contacts", "POST-email");
     try {
-      const mailDb = supabaseAdmin();
-      const [cRes, jRes] = await Promise.all([
-        mailDb.from("candidates").select("full_name, contact_email").eq("id", candidate_id).maybeSingle(),
+      const candidates = await col<CandidateDoc>(Collections.candidates);
+      const jobs = await col<JobDoc>(Collections.jobs);
+      const [cc, jj] = await Promise.all([
+        candidates.findOne(
+          { _id: candidate_id },
+          { projection: { full_name: 1, contact_email: 1 } },
+        ),
         job_id
-          ? mailDb.from("jobs").select("title, employers(company_name)").eq("id", job_id).maybeSingle()
-          : Promise.resolve({ data: null }),
+          ? jobs.findOne({ _id: job_id }, { projection: { title: 1, employer_id: 1 } })
+          : Promise.resolve(null),
       ]);
-      const cc = cRes.data as { full_name?: string; contact_email?: string } | null;
       let jobTitle: string | null = null;
       let company: string | null = null;
-      if (job_id) {
-        const jj = jRes.data as {
-          title?: string;
-          employers?: { company_name?: string } | { company_name?: string }[] | null;
-        } | null;
-        jobTitle = jj?.title ?? null;
-        const emp = jj?.employers;
-        company = Array.isArray(emp)
-          ? (emp[0]?.company_name ?? null)
-          : (emp?.company_name ?? null);
+      if (job_id && jj) {
+        // Former join `employers(company_name)` → second query on employer_id.
+        jobTitle = jj.title ?? null;
+        if (jj.employer_id) {
+          const employers = await col<{ _id: string; company_name?: string | null }>(
+            Collections.employers,
+          );
+          const ee = await employers.findOne(
+            { _id: jj.employer_id },
+            { projection: { company_name: 1 } },
+          );
+          company = ee?.company_name ?? null;
+        }
       }
       if (!cc?.contact_email) {
         bg.add({ email_outcome: "skipped", email_reason: "no recipient", degraded: false });
@@ -247,8 +384,8 @@ export async function GET(request: Request) {
     wev.end({ status: 400 });
     return Response.json({ error: "candidate_id is required." }, { status: 400 });
   }
-  // Reject garbage up front: without this an invalid uuid falls into PostgREST
-  // and surfaces as a misleading 403 (owner path) or 500 (HR path).
+  // Reject garbage up front: without this an invalid uuid falls into a
+  // filter that surfaces as a misleading 403 (owner path) or 500 (HR path).
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidate_id)) {
     wev.end({ status: 400 });
     return Response.json({ error: "candidate_id must be a valid UUID." }, { status: 400 });
@@ -273,78 +410,28 @@ export async function GET(request: Request) {
       wev.end({ status: 403 });
       return Response.json({ error: "You can only view your own contact logs." }, { status: 403 });
     }
-    const db = owned.client;
-    let oq = db
-      .from("contact_log")
-      .select("id, employer_id, candidate_id, job_id, channel, message, created_at")
-      .eq("candidate_id", candidate_id)
-      .order("created_at", { ascending: false })
-      .order("id", { ascending: false });
-    if (parsed.data.cursor) {
-      const c = decodeCursor(parsed.data.cursor);
-      if (!c) {
-        wev.end({ status: 400 });
-        return Response.json({ error: "Invalid cursor." }, { status: 400 });
-      }
-      oq = oq.or(`created_at.lt.${c.createdAt},and(created_at.eq.${c.createdAt},id.lt.${c.id})`);
-      oq = oq.limit(pageSize + 1);
-    } else if (parsed.data.offset !== undefined) {
-      oq = oq.range(parsed.data.offset, parsed.data.offset + pageSize);
-    } else {
-      oq = oq.limit(pageSize + 1);
-    }
-    const { data, error } = await oq;
-    if (error) {
-      console.error("[contacts] list failed");
-      wev.add({ degraded: true });
-      wev.end({ status: 500, error: "contact list failed" });
-      return Response.json({ error: "contact list failed" }, { status: 500 });
-    }
-    const orows = (data ?? []) as { id: string; created_at: string }[];
-    const opage = orows.slice(0, pageSize);
-    const onext = orows.length > pageSize ? encodeCursor(orows[pageSize - 1].created_at, orows[pageSize - 1].id) : null;
-    wev.add({ degraded: false });
-    wev.end({ status: 200 });
-    return Response.json({ results: opage, nextCursor: onext, degraded: false });
+    const outcome = await runContactList(
+      owned.client,
+      { candidate_id },
+      parsed.data,
+      pageSize,
+    );
+    if (outcome.kind === "invalid-cursor") return invalidCursor(wev);
+    if (outcome.kind === "failed") return listFailure(wev);
+    return respondContactList(wev, outcome.rows, pageSize);
   }
   const hr = await requireHrDb(session);
   if (hr instanceof Response) {
     wev.end({ status: hr.status });
     return hr;
   }
-  const db = hr.client;
-  const employerId = hr.employerId;
-  let q = db
-    .from("contact_log")
-    .select("id, employer_id, candidate_id, job_id, channel, message, created_at")
-    .eq("candidate_id", candidate_id)
-    .eq("employer_id", employerId)
-    .order("created_at", { ascending: false })
-    .order("id", { ascending: false });
-  if (parsed.data.cursor) {
-    const c = decodeCursor(parsed.data.cursor);
-    if (!c) {
-      wev.end({ status: 400 });
-      return Response.json({ error: "Invalid cursor." }, { status: 400 });
-    }
-    q = q.or(`created_at.lt.${c.createdAt},and(created_at.eq.${c.createdAt},id.lt.${c.id})`);
-    q = q.limit(pageSize + 1);
-  } else if (parsed.data.offset !== undefined) {
-    q = q.range(parsed.data.offset, parsed.data.offset + pageSize);
-  } else {
-    q = q.limit(pageSize + 1);
-  }
-  const { data, error } = await q;
-  if (error) {
-    console.error("[contacts] list failed");
-    wev.add({ degraded: true });
-    wev.end({ status: 500, error: "contact list failed" });
-    return Response.json({ error: "contact list failed" }, { status: 500 });
-  }
-  const rows = (data ?? []) as { id: string; created_at: string }[];
-  const page = rows.slice(0, pageSize);
-  const nextCursor = rows.length > pageSize ? encodeCursor(rows[pageSize - 1].created_at, rows[pageSize - 1].id) : null;
-  wev.add({ degraded: false });
-  wev.end({ status: 200 });
-  return Response.json({ results: page, nextCursor, degraded: false });
+  const outcome = await runContactList(
+    hr.client,
+    { candidate_id, employer_id: hr.employerId },
+    parsed.data,
+    pageSize,
+  );
+  if (outcome.kind === "invalid-cursor") return invalidCursor(wev);
+  if (outcome.kind === "failed") return listFailure(wev);
+  return respondContactList(wev, outcome.rows, pageSize);
 }

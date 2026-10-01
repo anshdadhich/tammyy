@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tammy - Reverse Hiring Platform</title>
+<meta name="description" content="Candidates build one evidence-backed profile. Employers discover talent with semantic search, transparent scoring, and audit-logged outreach.">
+<script>(function(){try{var t=localStorage.getItem("tammy_theme");var d=t==="dark"||(t===null&&window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.setAttribute("data-theme",d?"dark":"light")}catch(e){}})()</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@100..900&family=Geist:wght@100..900&display=swap" rel="stylesheet">
+<style>:root{--font-geist-sans:"Geist";--font-geist-mono:"Geist Mono"}</style>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="relative min-h-screen bg-paper text-body antialiased selection:bg-brand selection:text-on-brand">
+<a href="#main-content" class="skip-link">Skip to content</a>
+<header class="site-navbar-wrap">
+  <div class="site-navbar !px-[max(24px,calc((100%_-_1160px)/2))]">
+    <a href="index.html" class="site-brand site-brand-text">Tammy</a>
+    <nav aria-label="Main navigation" class="site-navigation hidden lg:flex">
+      <div class="site-nav-links">
+        <a href="index.html#candidates" class="site-nav-link press is-active" style="position: relative" aria-current="page">
+          <span class="site-nav-pill"></span>
+          <span style="position: relative">Candidates</span>
+        </a>
+        <a href="hire.html" class="site-nav-link press" style="position: relative">
+          <span style="position: relative">Employers</span>
+        </a>
+        <a href="index.html#engine" class="site-nav-link press" style="position: relative">
+          <span style="position: relative">Match engine</span>
+        </a>
+        <a href="index.html#faq" class="site-nav-link press" style="position: relative">
+          <span style="position: relative">FAQ</span>
+        </a>
+      </div>
+    </nav>
+    <div class="site-nav-actions">
+      <div class="nav-menu-wrap">
+        <button type="button" class="nav-avatar press" aria-haspopup="menu" aria-expanded="false" aria-label="Account menu">AT</button>
+      </div>
+      <button type="button" class="theme-toggle press" aria-label="Toggle color theme" title="Toggle light / dark theme">
+        <svg class="theme-icon-sun" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+        <svg class="theme-icon-moon" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+      </button>
+      <button type="button" class="site-nav-burger lg:hidden press" aria-expanded="false" aria-label="Open menu">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+<main id="main-content">
+<section class="pt-20 lg:pt-28 pb-24">
+  <div class="max-w-[1160px] mx-auto px-6">
+    <p class="meta-chip">Admin</p>
+    <h1 class="text-[clamp(2rem,4.5vw,3.25rem)] font-semibold tracking-[-0.03em] leading-[1.06] text-ink mt-4">
+      Employer verification
+    </h1>
+    <p class="text-[16px] text-body mt-2 max-w-[52ch]">
+      Companies await approval here, oldest first. Verified employers unlock search.
+    </p>
+    <div class="mt-8">
+      <div aria-busy="false">
+        <div class="flex flex-wrap items-center gap-2 mb-6" role="tablist" aria-label="Verification status filter">
+          <button type="button" role="tab" aria-selected="true" class="btn btn-sm press btn-primary">Pending</button>
+          <button type="button" role="tab" aria-selected="false" class="btn btn-sm press btn-secondary">Verified</button>
+          <button type="button" role="tab" aria-selected="false" class="btn btn-sm press btn-secondary">Rejected</button>
+          <button type="button" role="tab" aria-selected="false" class="btn btn-sm press btn-secondary">All</button>
+        </div>
+        <ul class="grid gap-3">
+          <li class="rounded-2xl bg-surface border border-line p-5 flex flex-wrap items-center justify-between gap-4">
+            <div class="min-w-0">
+              <p class="font-semibold text-ink">Demo Logistics Co <span class="meta-chip" title="Work email domain matches the company website">domain match</span></p>
+              <p class="text-[13px] text-muted mt-1">hiring@demo.local · Logistics · 11-50</p>
+              <p class="text-[13px] mt-1 flex flex-wrap gap-x-3 gap-y-1">
+                <a href="https://demo.local" target="_blank" rel="noopener noreferrer" class="underline decoration-muted underline-offset-2">Website</a>
+                <span class="text-muted">No LinkedIn provided</span>
+              </p>
+              <p class="font-mono text-[11px] text-muted mt-1">verified · since 2026-01-14</p>
+            </div>
+            <div class="flex items-center gap-2">
+              <label class="font-mono text-[11px] text-muted" for="plan-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb">Plan</label>
+              <select id="plan-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" class="input" style="max-width:130px" aria-label="Billing plan for Demo Logistics Co">
+                <option value="free" selected>free · 25/mo</option>
+                <option value="basic">basic · 500/mo</option>
+                <option value="pro">pro · 2000/mo</option>
+              </select>
+            </div>
+          </li>
+          <li class="rounded-2xl bg-surface border border-line p-5 flex flex-wrap items-center justify-between gap-4">
+            <div class="min-w-0">
+              <p class="font-semibold text-ink">Northwind Retail Pvt Ltd <span class="meta-chip" title="Work email domain matches the company website">domain match</span></p>
+              <p class="text-[13px] text-muted mt-1">hr@northwindretail.in · Retail · 51-200</p>
+              <p class="text-[13px] mt-1 flex flex-wrap gap-x-3 gap-y-1">
+                <a href="https://northwindretail.in" target="_blank" rel="noopener noreferrer" class="underline decoration-muted underline-offset-2">Website</a>
+                <a href="https://www.linkedin.com/company/northwind-retail-pvt-ltd" target="_blank" rel="noopener noreferrer" class="underline decoration-muted underline-offset-2">LinkedIn</a>
+              </p>
+              <p class="font-mono text-[11px] text-muted mt-1">pending · since 2026-08-20</p>
+            </div>
+            <div class="flex items-center gap-2">
+              <button type="button" class="btn btn-primary btn-sm press">Verify</button>
+              <button type="button" class="btn btn-secondary btn-sm press">Reject</button>
+            </div>
+          </li>
+          <li class="rounded-2xl bg-surface border border-line p-5 flex flex-wrap items-center justify-between gap-4">
+            <div class="min-w-0">
+              <p class="font-semibold text-ink">Bluepeak Systems <span class="meta-chip" title="Work email domain matches the company website">domain match</span></p>
+              <p class="text-[13px] text-muted mt-1">people@bluepeak.io · Information Technology · 11-50</p>
+              <p class="text-[13px] mt-1 flex flex-wrap gap-x-3 gap-y-1">
+                <a href="https://bluepeak.io" target="_blank" rel="noopener noreferrer" class="underline decoration-muted underline-offset-2">Website</a>
+                <span class="text-muted">No LinkedIn provided</span>
+              </p>
+              <p class="font-mono text-[11px] text-muted mt-1">pending · since 2026-09-05</p>
+            </div>
+            <div class="flex items-center gap-2">
+              <button type="button" class="btn btn-primary btn-sm press">Verify</button>
+              <button type="button" class="btn btn-secondary btn-sm press">Reject</button>
+            </div>
+          </li>
+          <li class="rounded-2xl bg-surface border border-line p-5 flex flex-wrap items-center justify-between gap-4">
+            <div class="min-w-0">
+              <p class="font-semibold text-ink">Quick Hire Consultants <span class="meta-chip" title="Work email domain does not match the company website">no domain match</span></p>
+              <p class="text-[13px] text-muted mt-1">admin@quickhire.co.in · Staffing · 1-10</p>
+              <p class="text-[13px] mt-1 flex flex-wrap gap-x-3 gap-y-1">
+                <a href="https://quickhirehr.com" target="_blank" rel="noopener noreferrer" class="underline decoration-muted underline-offset-2">Website</a>
+                <a href="https://www.linkedin.com/company/quick-hire-consultants" target="_blank" rel="noopener noreferrer" class="underline decoration-muted underline-offset-2">LinkedIn</a>
+              </p>
+              <p class="font-mono text-[11px] text-muted mt-1">rejected · since 2026-07-30</p>
+            </div>
+            <div class="flex items-center gap-2">
+              <label class="font-mono text-[11px] text-muted" for="plan-cccccccc-cccc-cccc-cccc-cccccccccccc">Plan</label>
+              <select id="plan-cccccccc-cccc-cccc-cccc-cccccccccccc" class="input" style="max-width:130px" aria-label="Billing plan for Quick Hire Consultants">
+                <option value="free" selected>free · 25/mo</option>
+                <option value="basic">basic · 500/mo</option>
+                <option value="pro">pro · 2000/mo</option>
+              </select>
+            </div>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+</div>
+</body>
+</html>

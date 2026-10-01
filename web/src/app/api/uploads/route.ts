@@ -1,13 +1,20 @@
-import { supabaseAdmin } from "@/lib/supabase";
-import { getSessionUser, requireHrDb, requireOwnerDb } from "@/lib/supabase-user";
+import { randomUUID } from "crypto";
+import { getSessionUser, requireHrDb, requireOwnerDb } from "@/lib/auth-user";
 import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { redactPii } from "@/lib/redact";
+import { AppDoc, col, Collections } from "@/lib/mongo";
+import {
+  deleteObject,
+  getObject,
+  isDuplicateObject,
+  objectUrl,
+  putObject,
+} from "@/lib/storage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const MAX_BYTES = 10 * 1024 * 1024;
-const SIGNED_URL_TTL = 900;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PATH_RE =
@@ -176,56 +183,41 @@ export async function POST(request: Request) {
   if (bytes.length === 0) return err("file is empty");
   const sniffed = sniffFile(ext, bytes);
   if (!sniffed.ok) return err(sniffed.reason ?? "file content rejected");
-  const safeContentType = FIXED_CONTENT_TYPE[ext] ?? "application/octet-stream";
 
   const bucket = KIND_BUCKET[kind];
   const path = `${candidateId}/${Date.now()}-${sanitizeFilename(file.name)}`;
 
-  const db = supabaseAdmin();
-
-  const { data: cand } = await db
-    .from("candidates")
-    .select("id")
-    .eq("id", candidateId)
-    .maybeSingle();
+  const candidates = await col<AppDoc>(Collections.candidates);
+  const cand = await candidates.findOne({ _id: candidateId }, { projection: { _id: 1 } });
   if (!cand) return err("candidate not found", 404);
 
-  const { error: upErr } = await db.storage
-    .from(bucket)
-    .upload(path, new Blob([bytes as unknown as BlobPart], { type: safeContentType }), { contentType: safeContentType, upsert: false });
-  if (upErr) {
-    const dup =
-      /duplicate|already exists|resource already exists/i.test(upErr.message);
+  try {
+    await putObject(bucket, path, bytes);
+  } catch (e) {
+    if (isDuplicateObject(e)) return err("upload failed", 409);
     console.error("[uploads] storage upload failed", redactPii(bucket));
-    return err("upload failed", dup ? 409 : 500);
-  }
-
-  const downloadName = path.split("/").pop() ?? "download";
-  const { data: signed, error: signErr } = await db.storage
-    .from(bucket)
-    .createSignedUrl(path, SIGNED_URL_TTL, { download: downloadName });
-  if (signErr || !signed?.signedUrl) {
-    console.error("[uploads] signing failed", redactPii(bucket));
-    return err("uploaded but signing failed", 500);
+    return err("upload failed", 500);
   }
 
   try {
-    const { error: linkErr } = await db
-      .from("candidates")
-      .update({ [KIND_COLUMN[kind]]: path })
-      .eq("id", candidateId);
-    if (linkErr) throw linkErr;
-  } catch (e) {
+    await candidates.updateOne(
+      { _id: candidateId },
+      { $set: { [KIND_COLUMN[kind]]: path, updated_at: new Date() } },
+    );
+  } catch {
     console.error("[uploads] profile link failed — removing orphan object", redactPii(bucket));
     try {
-      await db.storage.from(bucket).remove([path]);
+      await deleteObject(bucket, path);
     } catch {
     }
     return err("upload failed to attach to profile", 500);
   }
 
+  // Local objects re-check session access on every GET request, so there is
+  // no signed expiry to hand out — signedUrl is the same-origin path that
+  // streams the file with auth enforced per request.
   return Response.json(
-    { bucket, path, signedUrl: signed.signedUrl, expiresIn: SIGNED_URL_TTL },
+    { bucket, path, signedUrl: objectUrl(bucket, path), expiresIn: 0 },
     { status: 201 },
   );
 }
@@ -259,43 +251,53 @@ export async function GET(request: Request) {
     if (gate instanceof Response) return err("You can only view your own files.", gate.status);
   }
 
-  const db = supabaseAdmin();
   if (viewer.kind === "hr") {
     const hr = await requireHrDb(session);
     if (hr instanceof Response) return hr;
     const showColumn = SHOW_COLUMN_BY_BUCKET[bucket];
-    const { data: cand, error: candidateError } = await db
-      .from("candidates")
-      .select(`visibility_status, ${showColumn}`)
-      .eq("id", folderId)
-      .maybeSingle();
-    const candidate = cand as
-      | { visibility_status?: string | null; [key: string]: unknown }
-      | null;
+    const candidates = await col<AppDoc>(Collections.candidates);
+    const cand = await candidates.findOne(
+      { _id: folderId },
+      { projection: { visibility_status: 1, [showColumn]: 1 } },
+    );
     if (
-      candidateError ||
-      !candidate ||
-      (candidate.visibility_status ?? "visible") !== "visible" ||
-      candidate[showColumn] !== true
+      !cand ||
+      (cand.visibility_status ?? "visible") !== "visible" ||
+      cand[showColumn] !== true
     ) {
       return err("candidate not found", 404);
     }
     try {
-      const [{ data: sl }, { data: mt }, { data: cl }] = await Promise.all([
-        db.from("shortlists").select("id").eq("candidate_id", folderId).eq("employer_id", hr.employerId).limit(1),
-        db.from("candidate_matches").select("id, search_id").eq("candidate_id", folderId).limit(50),
-        db.from("contact_log").select("id").eq("candidate_id", folderId).eq("employer_id", hr.employerId).limit(1),
+      const shortlists = await col<AppDoc>(Collections.shortlists);
+      const matches = await col<AppDoc>(Collections.candidateMatches);
+      const contactLog = await col<AppDoc>(Collections.contactLog);
+      const [sl, mt, cl] = await Promise.all([
+        shortlists.findOne(
+          { candidate_id: folderId, employer_id: hr.employerId },
+          { projection: { _id: 1 } },
+        ),
+        matches
+          .find({ candidate_id: folderId }, { projection: { search_id: 1 } })
+          .limit(50)
+          .toArray(),
+        contactLog.findOne(
+          { candidate_id: folderId, employer_id: hr.employerId },
+          { projection: { _id: 1 } },
+        ),
       ]);
-      const matchedSearchIds = ((mt ?? []) as { id: string; search_id: string }[]).map((m) => m.search_id).filter(Boolean);
+      const matchedSearchIds = mt
+        .map((m) => m.search_id)
+        .filter((v): v is string => typeof v === "string" && v.length > 0);
       let matchedOwn = false;
       if (matchedSearchIds.length) {
-        const { data: own } = await db.from("searches").select("id").in("id", matchedSearchIds).eq("employer_id", hr.employerId).limit(1);
-        matchedOwn = Array.isArray(own) && own.length > 0;
+        const searches = await col<AppDoc>(Collections.searches);
+        const own = await searches.findOne({
+          _id: { $in: matchedSearchIds },
+          employer_id: hr.employerId,
+        });
+        matchedOwn = own !== null;
       }
-      const entitled =
-        (Array.isArray(sl) && sl.length > 0) ||
-        matchedOwn ||
-        (Array.isArray(cl) && cl.length > 0);
+      const entitled = sl !== null || matchedOwn || cl !== null;
       if (!entitled) {
         return err("no access to these files", 403);
       }
@@ -303,26 +305,29 @@ export async function GET(request: Request) {
       return err("no access to these files", 403);
     }
   }
-  const downloadName = path.split("/").pop() ?? "download";
-  const { data: signed, error } = await db.storage
-    .from(bucket)
-    .createSignedUrl(path, SIGNED_URL_TTL, { download: downloadName });
-  if (error || !signed?.signedUrl) {
-    return err("sign failed (object may not exist)", 404);
-  }
+
   try {
-    await db.from("audit_logs").insert({
+    const auditLogs = await col<AppDoc>(Collections.auditLogs);
+    await auditLogs.insertOne({
+      _id: randomUUID(),
       action: "file_view",
       target_type: bucket,
       target_id: folderId,
       metadata: { path, bucket },
+      created_at: new Date(),
     });
   } catch {
   }
-  return Response.json({
-    bucket,
-    path,
-    signedUrl: signed.signedUrl,
-    expiresIn: SIGNED_URL_TTL,
+
+  const buf = await getObject(bucket, path);
+  if (!buf) return err("file not found", 404);
+  const downloadName = path.split("/").pop() ?? "download";
+  const fileExt = (downloadName.split(".").pop() ?? "").toLowerCase();
+  return new Response(new Uint8Array(buf), {
+    headers: {
+      "content-type": FIXED_CONTENT_TYPE[fileExt] ?? "application/octet-stream",
+      "content-disposition": `inline; filename="${downloadName}"`,
+      "cache-control": "private, max-age=300",
+    },
   });
 }

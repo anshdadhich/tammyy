@@ -37,24 +37,32 @@ export function lockContacts<T extends Record<string, unknown>>(row: T): T {
   return out as T;
 }
 
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { AppDoc, col, Collections } from "@/lib/mongo";
 
-type IdQuery = Pick<SupabaseClient, "from">;
-
+/** Candidates this employer has shortlisted or contacted (MongoDB). */
 export async function revealedCandidateIds(
-  db: IdQuery,
   employerId: string,
 ): Promise<Set<string>> {
   const out = new Set<string>();
   try {
-    const [{ data: sl }, { data: cl }] = await Promise.all([
-      db.from("shortlists").select("candidate_id").eq("employer_id", employerId).limit(10000),
-      db.from("contact_log").select("candidate_id").eq("employer_id", employerId).limit(10000),
+    const [shortlists, contactLog] = await Promise.all([
+      col<AppDoc>(Collections.shortlists),
+      col<AppDoc>(Collections.contactLog),
     ]);
-    for (const r of ((sl ?? []) as { candidate_id: string }[])) {
+    const [slRows, clRows] = await Promise.all([
+      shortlists
+        .find({ employer_id: employerId }, { projection: { candidate_id: 1 } })
+        .limit(10000)
+        .toArray(),
+      contactLog
+        .find({ employer_id: employerId }, { projection: { candidate_id: 1 } })
+        .limit(10000)
+        .toArray(),
+    ]);
+    for (const r of slRows) {
       if (r.candidate_id) out.add(String(r.candidate_id));
     }
-    for (const r of ((cl ?? []) as { candidate_id: string }[])) {
+    for (const r of clRows) {
       if (r.candidate_id) out.add(String(r.candidate_id));
     }
   } catch {

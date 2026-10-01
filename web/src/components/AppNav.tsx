@@ -8,11 +8,8 @@ import { Menu, Moon, Sun, X } from "lucide-react";
 import { toggleTheme } from "@/lib/theme";
 import {
   SESSION_EVENT,
-  clearHrSession,
-  clearOwnerSession,
-  fetchHrSession,
-  fetchOwnerSession,
-  readHrSession,
+  fetchViewer,
+  signOut as endSession,
   recallViewer,
   viewerInitials,
   type ViewerSession,
@@ -113,6 +110,10 @@ export default function AppNav({ active: activeProp, initialViewer = null, viewe
   useLayoutEffect(() => {
     const remembered = recallViewer();
     if (remembered) {
+      // Hydrate the remembered session synchronously before first paint so a
+      // returning user never sees a logged-out flash. External-store read on
+      // mount by design — async deferral would reintroduce the flash.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setViewer((cur) => cur ?? remembered);
       setProvisional(false);
     }
@@ -120,25 +121,20 @@ export default function AppNav({ active: activeProp, initialViewer = null, viewe
 
   useEffect(() => {
     let alive = true;
-    const settle = (v: ViewerSession | null, authoritative: boolean) => {
-      if (!alive) return;
-      if (v !== null || authoritative) {
-        setViewer(v);
-        setProvisional(false);
-      }
+    const load = () => {
+      fetchViewer()
+        .then((v) => {
+          if (!alive) return;
+          setViewer(v);
+          setProvisional(false);
+        })
+        .catch(() => {
+          // Network/5xx: keep the optimistic state instead of painting
+          // logged-out UI over a signed-in user (or vice versa).
+        });
     };
-    const load = (authoritative: boolean) => {
-      const hr = readHrSession();
-      if (hr) {
-        settle(hr, true);
-        return;
-      }
-      Promise.all([fetchHrSession(), fetchOwnerSession()]).then(
-        ([h, o]) => settle(h ?? o, authoritative),
-      );
-    };
-    load(true);
-    const onEvent = () => load(false);
+    load();
+    const onEvent = () => load();
     window.addEventListener(SESSION_EVENT, onEvent);
     return () => {
       alive = false;
@@ -169,8 +165,7 @@ export default function AppNav({ active: activeProp, initialViewer = null, viewe
   }, [authOpen, profileOpen]);
 
   const signOut = async () => {
-    clearHrSession();
-    await clearOwnerSession();
+    await endSession();
     setViewer(null);
     setProvisional(false);
     setProfileOpen(false);

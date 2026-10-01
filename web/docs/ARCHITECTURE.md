@@ -14,6 +14,18 @@
 > Flows A/B/D/E and landing/admin/dashboard pages below describe the PREVIOUS
 > Next.js UI and no longer exist in code. Backend flows (API routes, `lib/`,
 > Inngest pipeline, Supabase schema) remain accurate.
+>
+> NOTE (2026-10-01): Supabase fully removed — MongoDB is now the only backend.
+> Auth = email+password (scrypt hashes in `lib/password.ts`) with an opaque
+> `tammy_session` cookie resolved against the `sessions` collection
+> (`lib/auth-user.ts`, `lib/session.ts`); `users` owns roles directly (no
+> `auth_id`, no OTP/`supabase.auth`). Data = official `mongodb` driver
+> (`lib/mongo.ts`) — all sections below describing Postgres tables, RLS,
+> PostgREST queries, `supabaseAdmin()`, the `match_chunks` RPC (now app-side
+> cosine in `lib/matching/mongo-retrieval.ts`), Supabase Storage (now local
+> disk via `lib/storage.ts`), or `@supabase/*` clients are historical. The
+> `supabase/` SQL + `web/.env` Supabase vars are gone; env is `MONGODB_URI` /
+> `MONGODB_DB`. Seed: `web/scripts/seed-mongo.mjs`.
 
 > ONE record of what the code DOES. Verified against `web/src/**`, `supabase/*.sql`,
 > `web/scripts/*`, `web/package.json`, `web/.env.example` (names only).

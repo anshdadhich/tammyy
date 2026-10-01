@@ -1,4 +1,4 @@
-import { supabaseAdmin } from "@/lib/supabase";
+import { AppDoc, col, Collections } from "@/lib/mongo";
 import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { readJsonBody } from "@/lib/http";
 
@@ -17,19 +17,16 @@ export async function POST(request: Request) {
     return Response.json({ error: "Enter a valid email." }, { status: 400 });
   }
   try {
-    const db = supabaseAdmin();
-    const lookup = db
-      .from("candidates")
-      .select("id")
-      .eq("contact_email", email)
-      .eq("visibility_status", "visible")
-      .order("created_at", { ascending: false })
+    const candidates = await col<AppDoc>(Collections.candidates);
+    const row = await candidates
+      .find(
+        { contact_email: email, visibility_status: "visible" },
+        { projection: { _id: 1 } },
+      )
+      .sort({ created_at: -1 })
       .limit(1)
-      .maybeSingle();
-    const { data, error } = await lookup;
-    if (error) throw error;
-    const row = data as { id: string } | null;
-    return Response.json({ exists: !!row?.id });
+      .next();
+    return Response.json({ exists: !!row?._id });
   } catch {
     return Response.json({ error: "Lookup failed. Try again." }, { status: 500 });
   }

@@ -1,4 +1,4 @@
-import { supabaseAdmin } from "@/lib/supabase";
+import { AppDoc, col, Collections } from "@/lib/mongo";
 import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { readJsonBody } from "@/lib/http";
 import { signaturesEqual as secretsEqual } from "@/lib/api-auth";
@@ -46,23 +46,31 @@ export async function POST(request: Request) {
   if (allowlisted && !secretsEqual(email, allowlisted)) {
     return Response.json({ error: "bootstrap closed for this email" }, { status: 403 });
   }
-  const db = supabaseAdmin();
-  const existing = await db.from("users").select("id").eq("role", "admin").limit(1);
-  if (existing.error) {
+  const db = await col<AppDoc>(Collections.users);
+  let existingAdmin: { _id: string } | null = null;
+  try {
+    existingAdmin = await db.findOne({ role: "admin" }, { projection: { _id: 1 } });
+  } catch {
     return Response.json({ error: "bootstrap closed - try again" }, { status: 403 });
   }
-  const rows = existing.data as { id: string }[] | null;
-  if (rows && rows.length > 0) {
+  if (existingAdmin) {
     return Response.json({ error: "bootstrap closed - an admin already exists" }, { status: 403 });
   }
-  const { data } = await db
-    .from("users")
-    .update({ role: "admin" })
-    .eq("email", email)
-    .select("id, email, role")
-    .maybeSingle();
+  let data: AppDoc | null = null;
+  try {
+    data = await db.findOneAndUpdate(
+      { email },
+      { $set: { role: "admin" } },
+      { returnDocument: "after", projection: { email: 1, role: 1 } },
+    );
+  } catch {
+    data = null;
+  }
   if (!data) {
     return Response.json({ error: "email not found - sign up first" }, { status: 404 });
   }
-  return Response.json({ ok: true, admin: data });
+  return Response.json({
+    ok: true,
+    admin: { id: data._id, email: data.email as string, role: data.role as string },
+  });
 }

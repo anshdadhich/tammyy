@@ -1,0 +1,927 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tammy - Reverse Hiring Platform</title>
+<meta name="description" content="Candidates build one evidence-backed profile. Employers discover talent with semantic search, transparent scoring, and audit-logged outreach.">
+<script>(function(){try{var t=localStorage.getItem("tammy_theme");var d=t==="dark"||(t===null&&window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.setAttribute("data-theme",d?"dark":"light")}catch(e){}})()</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@100..900&family=Geist:wght@100..900&display=swap" rel="stylesheet">
+<style>:root{--font-geist-sans:"Geist";--font-geist-mono:"Geist Mono"}</style>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="relative min-h-screen bg-paper text-body antialiased selection:bg-brand selection:text-on-brand">
+<a href="#main-content" class="skip-link">Skip to content</a>
+<header class="site-navbar-wrap">
+  <div class="site-navbar !px-[max(24px,calc((100%_-_1160px)/2))]">
+    <a href="index.html" class="site-brand site-brand-text">Tammy</a>
+    <nav aria-label="Main navigation" class="site-navigation hidden lg:flex">
+      <div class="site-nav-links">
+        <a href="index.html#candidates" class="site-nav-link press is-active" style="position: relative" aria-current="page">
+          <span class="site-nav-pill"></span>
+          <span style="position: relative">Candidates</span>
+        </a>
+        <a href="hire.html" class="site-nav-link press" style="position: relative">
+          <span style="position: relative">Employers</span>
+        </a>
+        <a href="index.html#engine" class="site-nav-link press" style="position: relative">
+          <span style="position: relative">Match engine</span>
+        </a>
+        <a href="index.html#faq" class="site-nav-link press" style="position: relative">
+          <span style="position: relative">FAQ</span>
+        </a>
+      </div>
+    </nav>
+    <div class="site-nav-actions">
+      <button type="button" class="theme-toggle press" aria-label="Toggle color theme" title="Toggle light / dark theme">
+        <svg class="theme-icon-sun" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+        <svg class="theme-icon-moon" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+      </button>
+      <div class="nav-menu-wrap">
+        <button type="button" class="site-nav-cta press h-10" aria-haspopup="menu" aria-expanded="false">Login / Sign up</button>
+      </div>
+      <button type="button" class="site-nav-burger lg:hidden press" aria-expanded="false" aria-label="Open menu">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+<main id="main-content">
+
+<section id="top" class="relative pt-20 lg:pt-28 pb-24 overflow-hidden">
+  <div class="max-w-[1160px] mx-auto px-6">
+    <h1 class="rise text-[clamp(2.5rem,5.6vw,4.25rem)] font-semibold tracking-[-0.03em] leading-[1.05] text-ink" style="--d: 60ms">
+      Candidates don't apply.
+      <br>
+      Employers discover them.
+    </h1>
+
+    <div class="rise flex flex-wrap items-center gap-3 mt-8" style="--d: 160ms">
+      <span style="display: inline-block; border-radius: 999px">
+        <a href="join.html" class="btn btn-primary">Build my page</a>
+      </span>
+      <a href="hire-login.html" class="btn btn-secondary press">I'm hiring <svg class="w-4 h-4" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a>
+    </div>
+
+    <div class="rise mt-14 lg:mt-16" style="--d: 280ms">
+      <div class="grid lg:grid-cols-5 gap-10 lg:gap-14 items-start">
+        <div class="lg:col-span-3 relative">
+          <div class="relative rounded-[28px] bg-brand p-8 sm:p-12 overflow-hidden shadow-soft-lg">
+            <div class="absolute inset-0" aria-hidden="true"><canvas class="dither-soft" data-dither style="display: block; width: 100%; height: 100%; image-rendering: pixelated; pointer-events: none"></canvas></div>
+
+            <div class="relative rounded-2xl bg-surface shadow-soft-md px-6 py-6 sm:px-8 sm:py-7">
+              <div class="flex items-center justify-between text-[11px] text-muted mb-4 font-mono">
+                <span>MATCHING YOUR BRIEF</span>
+                <span class="text-brand-text flex items-center gap-1.5 font-sans font-medium">
+                  <span class="w-1.5 h-1.5 rounded-full bg-brand pulse-dot"></span> Active query
+                </span>
+              </div>
+              <div class="space-y-3">
+                <div class="flex items-center justify-between">
+                  <span class="flex items-center gap-2.5 text-[13px] text-ink">
+                    <svg class="w-3.5 h-3.5 text-brand-text" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+                    Parse brief
+                  </span>
+                  <span class="font-mono text-[11px] text-muted">done</span>
+                </div>
+                <div class="flex items-center justify-between">
+                  <span class="flex items-center gap-2.5 text-[13px] text-ink">
+                    <svg class="w-3.5 h-3.5 text-brand-text" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+                    Embed query
+                  </span>
+                  <span class="font-mono text-[11px] text-muted">done</span>
+                </div>
+                <div class="flex items-center justify-between">
+                  <span class="flex items-center gap-2.5 text-[13px] text-ink">
+                    <svg class="w-3.5 h-3.5 text-brand-text" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+                    Hybrid retrieval
+                  </span>
+                  <span class="font-mono text-[11px] text-muted">done</span>
+                </div>
+                <div class="flex items-center justify-between">
+                  <span class="flex items-center gap-2.5 text-[13px] text-ink">
+                    <span class="w-2 h-2 rounded-full bg-brand pulse-dot inline-block"></span>
+                    Score 5 dimensions
+                  </span>
+                  <span class="font-mono text-[11px] text-brand-text">running…</span>
+                </div>
+                <div class="flex items-center justify-between">
+                  <span class="flex items-center gap-2.5 text-[13px] text-muted">
+                    <span class="w-2 h-2 rounded-full border border-line inline-block"></span>
+                    Deep Read judge
+                  </span>
+                  <span class="font-mono text-[11px] text-muted">queued</span>
+                </div>
+                <div class="flex items-center justify-between">
+                  <span class="flex items-center gap-2.5 text-[13px] text-muted">
+                    <span class="w-2 h-2 rounded-full border border-line inline-block"></span>
+                    Unlock contact
+                  </span>
+                  <span class="font-mono text-[11px] text-muted">queued</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="lg:col-span-2 lg:pt-1">
+          <div class="match-controls">
+            <div class="match-mode-switcher">
+              <button type="button" class="match-mode" aria-pressed="false" style="position: relative">
+                <span style="position: relative">Describe role</span>
+              </button>
+              <button type="button" class="match-mode is-active" aria-pressed="true" style="position: relative">
+                <span class="match-mode-pill"></span>
+                <span style="position: relative">Search</span>
+              </button>
+              <button type="button" class="match-mode" aria-pressed="false" style="position: relative">
+                <span style="position: relative">Deep Read</span>
+              </button>
+            </div>
+            <button type="button" title="Re-run matching query" aria-label="Re-run matching query" class="match-run press">
+              <svg class="w-4 h-4 text-ink" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+            </button>
+          </div>
+
+          <div class="relative mt-10 min-h-[88px]">
+            <div>
+              <h3 class="text-lg font-semibold tracking-[-0.01em] text-ink">It explains every score.</h3>
+              <p class="text-[15px] leading-relaxed text-body mt-2">Semantic fit, skill evidence, project depth, constraints and seniority - each weighed from what people actually built, not what they claimed. Every value is real and inspectable, so what lands is a shortlist, not a guess.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="py-24">
+  <div class="max-w-[1160px] mx-auto px-6">
+    <div class="mb-10 lg:mb-14">
+      <h2 class="text-[clamp(1.75rem,3.2vw,2.5rem)] font-semibold tracking-[-0.02em] leading-[1.12] text-ink">
+        Hiring is backwards.
+      </h2>
+      <p class="text-[17px] leading-[1.6] text-muted max-w-[560px] mt-4">
+        Candidates repeatedly rewrite the same story for hundreds of applications. Employers
+        receive stacks of resumes optimized for keywords, not evidence.
+      </p>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-6">
+      <div class="rounded-2xl bg-surface p-7 shadow-soft-md">
+        <div class="text-xs font-semibold text-muted mb-3">Candidate</div>
+        <h3 class="text-xl font-semibold tracking-[-0.01em] text-ink mb-3">
+          Apply. Rewrite. Repeat.
+        </h3>
+        <p class="text-[15px] text-body leading-relaxed">
+          The strongest candidates spend their time formatting applications instead of
+          building. Every company asks for the same information in a slightly different box.
+        </p>
+
+        <div class="mt-6 flex flex-col gap-2">
+          <div class="h-10 rounded-xl bg-inset flex items-center justify-between px-3 text-[13px] text-body">
+            <span>Application #142 · Staff Engineer</span>
+            <span class="text-muted font-mono text-[11px]">Awaiting review</span>
+          </div>
+          <div class="h-10 rounded-xl bg-inset flex items-center justify-between px-3 text-[13px] text-body">
+            <span>Application #141 · Systems Engineer</span>
+            <span class="text-warn font-mono text-[11px] font-medium">Filtered</span>
+          </div>
+          <div class="h-10 rounded-xl bg-inset flex items-center justify-between px-3 text-[13px] text-body">
+            <span>Application #140 · Backend Lead</span>
+            <span class="text-muted font-mono text-[11px]">Unread</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="rounded-2xl bg-brand-soft border border-brand-line p-7 shadow-soft-md">
+        <div class="text-xs font-semibold text-brand-text mb-3">Tammy</div>
+        <h3 class="text-xl font-semibold tracking-[-0.01em] text-ink mb-3">
+          Prove it once.
+        </h3>
+        <p class="text-[15px] text-body leading-relaxed">
+          Candidates create one evidence-backed profile. Tammy turns projects, experience, and
+          proof into a structured talent signal employers can search.
+        </p>
+
+        <div class="flex flex-wrap gap-2 mt-6">
+          <span class="text-[11px] font-mono uppercase tracking-wide px-2.5 py-1 rounded-full bg-surface border border-line text-muted">Experience</span>
+          <span class="text-[11px] font-mono uppercase tracking-wide px-2.5 py-1 rounded-full bg-surface border border-line text-muted">Projects</span>
+          <span class="text-[11px] font-mono uppercase tracking-wide px-2.5 py-1 rounded-full bg-brand text-on-brand border border-transparent">Proof</span>
+          <span class="text-[11px] font-mono uppercase tracking-wide px-2.5 py-1 rounded-full bg-surface border border-line text-muted">Terms</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="candidates" class="py-24">
+  <div class="max-w-[1160px] mx-auto px-6">
+    <div class="mb-10 lg:mb-14">
+      <h2 class="text-[clamp(1.75rem,3.2vw,2.5rem)] font-semibold tracking-[-0.02em] leading-[1.12] text-ink">
+        Build your talent record once.
+      </h2>
+      <p class="text-[17px] leading-[1.6] text-muted max-w-[560px] mt-4">
+        Four steps. Autosaved drafts. Real evidence. Your resume stays in your hands. Review
+        everything before your profile becomes discoverable.
+      </p>
+    </div>
+
+    <div class="grid md:grid-cols-[240px_1fr] rounded-2xl bg-surface overflow-hidden shadow-soft-md">
+      <div class="p-6 bg-inset">
+        <div class="text-sm font-semibold text-ink mb-1">Your profile</div>
+        <div class="text-[13px] text-muted mb-6 flex items-center gap-1.5">
+          <span class="w-1.5 h-1.5 rounded-full bg-success"></span> Saved automatically
+        </div>
+
+        <div class="flex flex-col gap-3">
+          <div class="flex items-center gap-2 text-sm text-muted">
+            <span class="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-mono bg-surface border border-line text-muted">
+              1
+            </span>
+            <span>Basics</span>
+          </div>
+          <div class="flex items-center gap-2 text-sm text-muted">
+            <span class="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-mono bg-surface border border-line text-muted">
+              2
+            </span>
+            <span>Profile &amp; skills</span>
+          </div>
+          <div class="flex items-center gap-2 text-sm text-ink font-semibold">
+            <span class="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-mono bg-brand text-on-brand shadow-soft-sm">
+              3
+            </span>
+            <span>Proof</span>
+          </div>
+          <div class="flex items-center gap-2 text-sm text-muted">
+            <span class="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-mono bg-surface border border-line text-muted">
+              4
+            </span>
+            <span>Resume &amp; terms</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="p-6">
+        <h3 class="text-base font-semibold text-ink mb-1">Show what you built.</h3>
+        <p class="text-[13px] text-muted mb-5">Evidence makes the profile useful.</p>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div class="border border-line rounded-xl p-3 bg-inset">
+            <div class="text-[10px] font-mono text-muted uppercase mb-1">Project</div>
+            <div class="text-[13px] font-semibold text-ink">Distributed inference service</div>
+          </div>
+          <div class="border border-line rounded-xl p-3 bg-inset">
+            <div class="text-[10px] font-mono text-muted uppercase mb-1">Role</div>
+            <div class="text-[13px] font-semibold text-ink">Lead Engineer</div>
+          </div>
+          <div class="col-span-2 border border-line rounded-xl p-3 bg-inset">
+            <div class="text-[10px] font-mono text-muted uppercase mb-1">
+              What did you actually do?
+            </div>
+            <div class="text-[13px] font-semibold text-ink">
+              Reduced inference latency by 41% across production workloads.
+            </div>
+          </div>
+          <div class="border border-line rounded-xl p-3 bg-inset">
+            <div class="text-[10px] font-mono text-muted uppercase mb-1">Evidence</div>
+            <div class="text-[13px] font-semibold text-ink">GitHub · Benchmarks</div>
+          </div>
+          <div class="border border-line rounded-xl p-3 bg-inset">
+            <div class="text-[10px] font-mono text-muted uppercase mb-1">Impact</div>
+            <div class="text-[13px] font-semibold text-ink">41% faster throughput</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="engine" class="py-24">
+  <div class="max-w-[1160px] mx-auto px-6">
+    <div class="mb-10 lg:mb-14">
+      <h2 class="text-[clamp(1.75rem,3.2vw,2.5rem)] font-semibold tracking-[-0.02em] leading-[1.12] text-ink">
+        The pipeline reads like a hiring manager.
+      </h2>
+      <p class="text-[17px] leading-[1.6] text-muted max-w-[560px] mt-4">
+        Tammy doesn't turn candidates into mysterious AI scores. It builds a factual,
+        evidence-linked representation of the work behind the resume.
+      </p>
+    </div>
+
+    <div class="rounded-2xl bg-surface p-6 sm:p-7 shadow-soft-md">
+      <div class="flex flex-wrap justify-between items-center gap-3 pb-5 border-b border-line mb-5">
+        <div>
+          <div class="text-[10px] font-mono text-muted uppercase">Live search trace</div>
+          <div class="text-sm font-semibold text-ink mt-1">
+            Backend engineer · distributed systems
+          </div>
+        </div>
+        <span class="text-[11px] font-mono px-2.5 py-1 rounded-full bg-success-soft text-success flex items-center gap-1.5">
+          <span class="w-1.5 h-1.5 rounded-full bg-success"></span> 30 candidates found
+        </span>
+      </div>
+
+      <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-5">
+        <div class="p-2">
+          <span class="text-[11px] font-mono font-semibold text-brand-text">01</span>
+          <h3 class="text-[15px] font-semibold text-ink mt-1.5 mb-1">Filter</h3>
+          <p class="text-[13px] text-muted leading-relaxed">Hard constraints, availability, and compensation requirements.</p>
+          <div class="flex justify-end mt-3">
+            <span class="text-[13px] font-semibold text-ink">88%</span>
+          </div>
+          <div class="trace-rule" aria-hidden="true">
+            <div class="trace-fill" style="width: 88%; background: var(--brand)"></div>
+          </div>
+        </div>
+        <div class="p-2">
+          <span class="text-[11px] font-mono font-semibold text-brand-text">02</span>
+          <h3 class="text-[15px] font-semibold text-ink mt-1.5 mb-1">Vectors</h3>
+          <p class="text-[13px] text-muted leading-relaxed">Every meaningful project chunk becomes semantically searchable.</p>
+          <div class="flex justify-end mt-3">
+            <span class="text-[13px] font-semibold text-ink">74%</span>
+          </div>
+          <div class="trace-rule" aria-hidden="true">
+            <div class="trace-fill" style="width: 74%; background: var(--brand)"></div>
+          </div>
+        </div>
+        <div class="p-2">
+          <span class="text-[11px] font-mono font-semibold text-brand-text">03</span>
+          <h3 class="text-[15px] font-semibold text-ink mt-1.5 mb-1">Score</h3>
+          <p class="text-[13px] text-muted leading-relaxed">Depth of technical contribution and evidence credibility.</p>
+          <div class="flex justify-end mt-3">
+            <span class="text-[13px] font-semibold text-ink">91%</span>
+          </div>
+          <div class="trace-rule" aria-hidden="true">
+            <div class="trace-fill" style="width: 91%; background: var(--brand)"></div>
+          </div>
+        </div>
+        <div class="p-2">
+          <span class="text-[11px] font-mono font-semibold text-brand-text">04</span>
+          <h3 class="text-[15px] font-semibold text-ink mt-1.5 mb-1">Judge</h3>
+          <p class="text-[13px] text-muted leading-relaxed">Evaluates fit, flags gaps, and calibrates interview questions.</p>
+          <div class="flex justify-end mt-3">
+            <span class="text-[13px] font-semibold text-ink">82%</span>
+          </div>
+          <div class="trace-rule" aria-hidden="true">
+            <div class="trace-fill" style="width: 82%; background: var(--brand)"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="py-24">
+  <div class="max-w-[1160px] mx-auto px-6">
+    <div class="mb-10 lg:mb-14">
+      <h2 class="text-[clamp(1.75rem,3.2vw,2.5rem)] font-semibold tracking-[-0.02em] leading-[1.12] text-ink">
+        Describe the person. Don't write a Boolean query.
+      </h2>
+      <p class="text-[17px] leading-[1.6] text-muted max-w-[560px] mt-4">
+        An employer describes the role in natural language. Tammy searches structured
+        experience, project evidence, and semantic representations.
+      </p>
+    </div>
+
+    <div role="list" data-slot="stepper" data-orientation="vertical" class="group/stepper inline-flex data-[orientation=horizontal]:w-full data-[orientation=horizontal]:flex-row data-[orientation=vertical]:flex-col !grid w-full grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-5">
+      <div role="listitem" data-slot="stepper-item" data-state="inactive" class="group/step flex items-center group-data-[orientation=horizontal]/stepper:flex-row group-data-[orientation=vertical]/stepper:flex-col relative isolate min-w-0 overflow-hidden rounded-2xl border border-line bg-inset p-5 !items-start">
+        <span aria-hidden="true" class="pointer-events-none absolute -right-2 -top-3 -z-10 select-none font-mono text-[64px] font-semibold leading-none tracking-[-0.04em] text-brand-text opacity-10">
+          01
+        </span>
+        <span data-slot="stepper-indicator" data-state="inactive" class="bg-brand text-on-brand data-[state=active]:bg-brand data-[state=completed]:bg-brand relative flex size-8 shrink-0 items-center justify-center rounded-full font-mono text-[11.5px] font-semibold leading-none">01</span>
+        <h3 data-slot="stepper-title" class="text-[15px] font-semibold text-ink mt-4">Describe</h3>
+        <p data-slot="stepper-description" class="text-[13.5px] leading-relaxed text-muted mt-1.5">"Senior backend engineer who has shipped distributed systems."</p>
+      </div>
+      <div role="listitem" data-slot="stepper-item" data-state="inactive" class="group/step flex items-center group-data-[orientation=horizontal]/stepper:flex-row group-data-[orientation=vertical]/stepper:flex-col relative isolate min-w-0 overflow-hidden rounded-2xl border border-line bg-inset p-5 !items-start">
+        <span aria-hidden="true" class="pointer-events-none absolute -right-2 -top-3 -z-10 select-none font-mono text-[64px] font-semibold leading-none tracking-[-0.04em] text-brand-text opacity-10">
+          02
+        </span>
+        <span data-slot="stepper-indicator" data-state="inactive" class="bg-brand text-on-brand data-[state=active]:bg-brand data-[state=completed]:bg-brand relative flex size-8 shrink-0 items-center justify-center rounded-full font-mono text-[11.5px] font-semibold leading-none">02</span>
+        <h3 data-slot="stepper-title" class="text-[15px] font-semibold text-ink mt-4">Search</h3>
+        <p data-slot="stepper-description" class="text-[13.5px] leading-relaxed text-muted mt-1.5">Relevant experience and project chunks are retrieved.</p>
+      </div>
+      <div role="listitem" data-slot="stepper-item" data-state="inactive" class="group/step flex items-center group-data-[orientation=horizontal]/stepper:flex-row group-data-[orientation=vertical]/stepper:flex-col relative isolate min-w-0 overflow-hidden rounded-2xl border border-line bg-inset p-5 !items-start">
+        <span aria-hidden="true" class="pointer-events-none absolute -right-2 -top-3 -z-10 select-none font-mono text-[64px] font-semibold leading-none tracking-[-0.04em] text-brand-text opacity-10">
+          03
+        </span>
+        <span data-slot="stepper-indicator" data-state="inactive" class="bg-brand text-on-brand data-[state=active]:bg-brand data-[state=completed]:bg-brand relative flex size-8 shrink-0 items-center justify-center rounded-full font-mono text-[11.5px] font-semibold leading-none">03</span>
+        <h3 data-slot="stepper-title" class="text-[15px] font-semibold text-ink mt-4">Evaluate</h3>
+        <p data-slot="stepper-description" class="text-[13.5px] leading-relaxed text-muted mt-1.5">Evidence depth and verified metrics shape candidate ranking.</p>
+      </div>
+      <div role="listitem" data-slot="stepper-item" data-state="inactive" class="group/step flex items-center group-data-[orientation=horizontal]/stepper:flex-row group-data-[orientation=vertical]/stepper:flex-col relative isolate min-w-0 overflow-hidden rounded-2xl border border-line bg-inset p-5 !items-start">
+        <span aria-hidden="true" class="pointer-events-none absolute -right-2 -top-3 -z-10 select-none font-mono text-[64px] font-semibold leading-none tracking-[-0.04em] text-brand-text opacity-10">
+          04
+        </span>
+        <span data-slot="stepper-indicator" data-state="inactive" class="bg-brand text-on-brand data-[state=active]:bg-brand data-[state=completed]:bg-brand relative flex size-8 shrink-0 items-center justify-center rounded-full font-mono text-[11.5px] font-semibold leading-none">04</span>
+        <h3 data-slot="stepper-title" class="text-[15px] font-semibold text-ink mt-4">Understand</h3>
+        <p data-slot="stepper-description" class="text-[13.5px] leading-relaxed text-muted mt-1.5">Verdicts, exhibits, gaps, and calibrated questions.</p>
+      </div>
+      <div role="listitem" data-slot="stepper-item" data-state="inactive" class="group/step flex items-center group-data-[orientation=horizontal]/stepper:flex-row group-data-[orientation=vertical]/stepper:flex-col relative isolate min-w-0 overflow-hidden rounded-2xl border border-line bg-inset p-5 !items-start">
+        <span aria-hidden="true" class="pointer-events-none absolute -right-2 -top-3 -z-10 select-none font-mono text-[64px] font-semibold leading-none tracking-[-0.04em] text-brand-text opacity-10">
+          05
+        </span>
+        <span data-slot="stepper-indicator" data-state="inactive" class="bg-brand text-on-brand data-[state=active]:bg-brand data-[state=completed]:bg-brand relative flex size-8 shrink-0 items-center justify-center rounded-full font-mono text-[11.5px] font-semibold leading-none">05</span>
+        <h3 data-slot="stepper-title" class="text-[15px] font-semibold text-ink mt-4">Contact</h3>
+        <p data-slot="stepper-description" class="text-[13.5px] leading-relaxed text-muted mt-1.5">Reach out directly with full audit-logging on both sides.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="py-24">
+  <div class="max-w-[1160px] mx-auto px-6">
+    <div class="mb-10 lg:mb-14">
+      <h2 class="text-[clamp(1.75rem,3.2vw,2.5rem)] font-semibold tracking-[-0.02em] leading-[1.12] text-ink">
+        Not another resume. A candidate dossier.
+      </h2>
+      <p class="text-[17px] leading-[1.6] text-muted max-w-[560px] mt-4">
+        The result gives a hiring manager enough context to decide whether a conversation is
+        worth having-without pretending the system knows more than the evidence says.
+        Illustrative example below; live dossiers render from real profiles.
+      </p>
+    </div>
+
+    <div class="grid md:grid-cols-[280px_1fr] rounded-2xl bg-surface overflow-hidden shadow-soft-md">
+      <div class="p-6 bg-inset">
+        <div class="w-10 h-10 rounded-xl bg-brand text-on-brand font-semibold text-sm flex items-center justify-center mb-3 shadow-soft-sm">
+          AK
+        </div>
+        <div class="text-[17px] font-semibold text-ink">Alex Kim</div>
+        <div class="text-[13px] text-muted mt-0.5">Backend · Infrastructure · AI</div>
+
+        <div class="flex flex-wrap gap-1.5 mt-5">
+          <span class="text-[11px] font-mono px-2 py-0.5 rounded-full bg-surface border border-line text-muted">
+            Python
+          </span>
+          <span class="text-[11px] font-mono px-2 py-0.5 rounded-full bg-surface border border-line text-muted">
+            Distributed Systems
+          </span>
+          <span class="text-[11px] font-mono px-2 py-0.5 rounded-full bg-surface border border-line text-muted">
+            Kubernetes
+          </span>
+          <span class="text-[11px] font-mono px-2 py-0.5 rounded-full bg-surface border border-line text-muted">
+            PostgreSQL
+          </span>
+        </div>
+
+        <div class="mt-5 pt-4 border-t border-line">
+          <div class="text-[10px] font-mono text-muted uppercase">Availability</div>
+          <div class="text-[13px] font-semibold text-ink mt-1 flex items-center gap-1.5">
+            <span class="w-1.5 h-1.5 rounded-full bg-success"></span> 30 days · Remote
+          </div>
+        </div>
+      </div>
+
+      <div class="p-6 flex flex-col gap-3">
+        <div class="rounded-xl p-4 bg-inset">
+          <div class="flex justify-between items-center mb-2 gap-3">
+            <span class="text-[13px] font-semibold text-ink">Distributed inference service</span>
+            <span class="text-[10px] font-mono font-medium text-muted bg-surface px-2 py-0.5 rounded-full border border-line shrink-0">
+              PROJECT
+            </span>
+          </div>
+          <p class="text-[13px] text-body leading-relaxed">
+            Designed and shipped a production inference layer handling high-volume model
+            requests with 41% latency reduction.
+          </p>
+        </div>
+
+        <div class="rounded-xl p-4 bg-inset">
+          <div class="flex justify-between items-center mb-2 gap-3">
+            <span class="text-[13px] font-semibold text-ink">Why this candidate</span>
+            <span class="text-[10px] font-mono font-medium text-brand-text bg-brand-soft px-2 py-0.5 rounded-full shrink-0">
+              JUDGE
+            </span>
+          </div>
+          <p class="text-[13px] text-body leading-relaxed">
+            Strong overlap with distributed systems requirements. Evidence supports production
+            ownership. Limited evidence of people management.
+          </p>
+        </div>
+
+        <div class="rounded-xl p-4 bg-inset">
+          <div class="flex justify-between items-center mb-2 gap-3">
+            <span class="text-[13px] font-semibold text-ink">Suggested interview questions</span>
+            <span class="text-[10px] font-mono font-medium text-muted bg-surface px-2 py-0.5 rounded-full border border-line shrink-0">
+              NEXT
+            </span>
+          </div>
+          <p class="text-[13px] text-body leading-relaxed">
+            Ask how the inference architecture handled failure recovery and how the latency
+            improvement was measured.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="py-24">
+  <div class="max-w-[1160px] mx-auto px-6">
+    <div class="mb-10 lg:mb-14">
+      <h2 class="text-[clamp(1.75rem,3.2vw,2.5rem)] font-semibold tracking-[-0.02em] leading-[1.12] text-ink">
+        Discovery without giving up control.
+      </h2>
+      <p class="text-[17px] leading-[1.6] text-muted max-w-[560px] mt-4">
+        Talent discovery only works if candidates trust the system. Privacy, control, and
+        accountability are part of the product.
+      </p>
+    </div>
+
+    <div class="grid md:grid-cols-3 rounded-2xl bg-surface overflow-hidden shadow-soft-md">
+      <div class="p-6 border-t border-line first:border-t-0 md:border-t-0 md:border-l md:first:border-l-0">
+        <div class="w-9 h-9 rounded-xl bg-brand-soft text-brand-text grid place-items-center text-[15px] mb-4" aria-hidden="true">
+          ◇
+        </div>
+        <h3 class="text-[15px] font-semibold text-ink mb-2">Private by design</h3>
+        <p class="text-[14px] text-muted leading-relaxed">
+          No public candidate directory. Employers are verified before they can discover
+          talent.
+        </p>
+      </div>
+
+      <div class="p-6 border-t border-line first:border-t-0 md:border-t-0 md:border-l md:first:border-l-0">
+        <div class="w-9 h-9 rounded-xl bg-brand-soft text-brand-text grid place-items-center text-[15px] mb-4" aria-hidden="true">
+          ◌
+        </div>
+        <h3 class="text-[15px] font-semibold text-ink mb-2">Candidate control</h3>
+        <p class="text-[14px] text-muted leading-relaxed">
+          Candidates control visibility, portfolio links, and can delete or export their
+          profile at any time.
+        </p>
+      </div>
+
+      <div class="p-6 border-t border-line first:border-t-0 md:border-t-0 md:border-l md:first:border-l-0">
+        <div class="w-9 h-9 rounded-xl bg-brand-soft text-brand-text grid place-items-center text-[15px] mb-4" aria-hidden="true">
+          ✓
+        </div>
+        <h3 class="text-[15px] font-semibold text-ink mb-2">Accountable contact</h3>
+        <p class="text-[14px] text-muted leading-relaxed">
+          Contact is direct for speed, while every profile view and inquiry is transparently
+          audit-logged.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="faq" class="py-24">
+  <div class="max-w-[920px] mx-auto px-6">
+    <div class="text-center max-w-2xl mx-auto mb-10">
+      <h2 class="text-[clamp(1.75rem,3.2vw,2.5rem)] font-semibold tracking-[-0.02em] leading-[1.12] text-ink">
+        Frequently asked questions.
+      </h2>
+      <p class="text-[17px] leading-[1.6] text-muted max-w-xl mx-auto mt-4">
+        Everything you need to know about the reverse discovery model, privacy guarantees, and
+        evaluation pipeline.
+      </p>
+    </div>
+
+    <div class="faq-list max-w-2xl mx-auto w-full">
+      <div class="faq-item">
+        <button type="button" id="faq-q-0" class="faq-trigger" aria-expanded="true" aria-controls="faq-panel-0">
+          <span>How is Tammy fundamentally different from LinkedIn or standard job boards?</span>
+          <span class="faq-trigger-ico">
+            <svg class="w-4 h-4 shrink-0 transition-transform duration-200" style="transform: rotate(180deg)" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </span>
+        </button>
+        <div class="faq-body open" id="faq-panel-0" role="region" aria-labelledby="faq-q-0">
+          <div>
+            <p>Traditional boards incentivize candidates to spam 200 keyword-stuffed resumes into black-box ATS filters. On Tammy, you build a single, comprehensive engineering record backed by concrete artifacts (PRs, benchmarks, architecture decisions). Employers search semantically for what you built, and reach out directly with verified context.</p>
+          </div>
+        </div>
+      </div>
+      <div class="faq-item">
+        <button type="button" id="faq-q-1" class="faq-trigger" aria-expanded="false" aria-controls="faq-panel-1">
+          <span>Can my current employer see that I have an active profile on Tammy?</span>
+          <span class="faq-trigger-ico">
+            <svg class="w-4 h-4 shrink-0 transition-transform duration-200" style="transform: rotate(0deg)" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </span>
+        </button>
+        <div class="faq-body" id="faq-panel-1" role="region" aria-labelledby="faq-q-1" aria-hidden="true">
+          <div>
+            <p>No. You can block specific domain names, corporate entities, or current employers with a single toggle. Additionally, there is no public candidate listing; only accredited, vetted hiring teams running calibrated searches can query indexed candidate signals.</p>
+          </div>
+        </div>
+      </div>
+      <div class="faq-item">
+        <button type="button" id="faq-q-2" class="faq-trigger" aria-expanded="false" aria-controls="faq-panel-2">
+          <span>What is the "Deep Read Judge" and how are scores formed?</span>
+          <span class="faq-trigger-ico">
+            <svg class="w-4 h-4 shrink-0 transition-transform duration-200" style="transform: rotate(0deg)" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </span>
+        </button>
+        <div class="faq-body" id="faq-panel-2" role="region" aria-labelledby="faq-q-2" aria-hidden="true">
+          <div>
+            <p>The Deep Read Judge is a structured reasoning model that inspects technical contributions across 5 distinct axes: system scale, architectural depth, operational evidence, verified metrics, and verified seniority. It does not output a mysterious vanity score-it gives the hiring manager written exhibits and specific suggested questions.</p>
+          </div>
+        </div>
+      </div>
+      <div class="faq-item">
+        <button type="button" id="faq-q-3" class="faq-trigger" aria-expanded="false" aria-controls="faq-panel-3">
+          <span>Is Tammy completely free for engineers and builders?</span>
+          <span class="faq-trigger-ico">
+            <svg class="w-4 h-4 shrink-0 transition-transform duration-200" style="transform: rotate(0deg)" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </span>
+        </button>
+        <div class="faq-body" id="faq-panel-3" role="region" aria-labelledby="faq-q-3" aria-hidden="true">
+          <div>
+            <p>Yes, 100% free forever for candidates. Tammy monetizes strictly on the employer side through search subscriptions and successful placement guarantees. We never charge candidates for visibility, priority indexing, or unlocking offers.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+<footer id="start" class="footer-simple">
+  <div class="footer-simple-shell">
+    <div class="footer-simple-frame">
+      <div class="footer-simple-blue">
+        <div class="footer-simple-dither" aria-hidden="true"><canvas class="dither-soft" data-dither style="display: block; width: 100%; height: 100%; image-rendering: pixelated; pointer-events: none"></canvas></div>
+        <div class="footer-simple-card">
+          <div class="footer-simple-grid">
+            <div class="footer-simple-brandblock">
+              <a href="index.html#top" class="footer-simple-logo">Tammy</a>
+              <div class="footer-simple-visit">
+                <span class="footer-simple-pill">Start here</span>
+                <a href="join.html" class="footer-simple-cta press">Build my page</a>
+                <a href="mailto:hiya@tammy.sh" class="footer-simple-mail">hiya@tammy.sh</a>
+              </div>
+            </div>
+            <nav class="footer-simple-col" aria-label="Talent">
+              <p class="footer-simple-h">Talent</p>
+              <a href="index.html#candidates">Candidates</a>
+              <a href="index.html#engine">How it works</a>
+              <a href="index.html#faq">FAQ</a>
+            </nav>
+            <nav class="footer-simple-col" aria-label="Hiring">
+              <p class="footer-simple-h">Hiring</p>
+              <a href="hire.html">Employers</a>
+              <a href="hire-search.html">Search</a>
+              <a href="hire-login.html">Employer login</a>
+              <a href="join.html">For candidates</a>
+            </nav>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="footer-simple-bottom">
+      <span>© 2026 Tammy Technologies Inc.</span>
+      <nav aria-label="Legal">
+        <a href="mailto:hiya@tammy.sh?subject=Privacy">Privacy</a>
+        <a href="mailto:hiya@tammy.sh?subject=Terms">Terms</a>
+        <a href="mailto:hiya@tammy.sh?subject=Security">Security</a>
+      </nav>
+    </div>
+  </div>
+</footer>
+</div>
+<script>
+// Vanilla port of web/src/components/DitherEffect.tsx (WebGL simplex-noise +
+// Bayer ordered dither) for the static export. Activates every
+// <canvas data-dither> on the page. Same shaders, same lifecycle behaviour:
+// 0.5x backbuffer + pixelated upscale, theme-aware colors, reduced-motion
+// static frame, visibility/intersection pausing.
+(function () {
+  var VERT = "attribute vec3 aPosition;\nvoid main() {\n  vec4 pos = vec4(aPosition, 1.0);\n  pos.xy = pos.xy * 2.0 - 1.0;\n  gl_Position = pos;\n}";
+
+  var FRAG = [
+    "precision highp float;",
+    "uniform vec2 u_resolution;",
+    "uniform float u_time;",
+    "uniform float uScale;",
+    "uniform vec3 u_colorFront;",
+    "uniform vec3 u_colorBack;",
+    "vec4 permute(vec4 x){return mod(((x*34.0)+1.0)*x,289.0);}",
+    "vec4 taylorInvSqrt(vec4 r){return 1.79284291400159 - 0.85373472095314 * r;}",
+    "float snoise(vec3 v){",
+    "  const vec2 C = vec2(1.0/6.0,1.0/3.0);",
+    "  const vec4 D = vec4(0.0,0.5,1.0,2.0);",
+    "  vec3 i = floor(v + dot(v,C.yyy));",
+    "  vec3 x0 = v - i + dot(i,C.xxx);",
+    "  vec3 g = step(x0.yzx, x0.xyz);",
+    "  vec3 l = 1.0 - g;",
+    "  vec3 i1 = min(g.xyz, l.zxy);",
+    "  vec3 i2 = max(g.xyz, l.zxy);",
+    "  vec3 x1 = x0 - i1 + C.xxx;",
+    "  vec3 x2 = x0 - i2 + C.yyy;",
+    "  vec3 x3 = x0 - D.yyy;",
+    "  i = mod(i,289.0);",
+    "  vec4 p = permute(permute(permute(",
+    "    i.z + vec4(0.0,i1.z,i2.z,1.0))",
+    "    + i.y + vec4(0.0,i1.y,i2.y,1.0))",
+    "    + i.x + vec4(0.0,i1.x,i2.x,1.0));",
+    "  float n_ = 0.142857142857;",
+    "  vec3 ns = n_ * D.wyz - D.xzx;",
+    "  vec4 j = p - 49.0 * floor(p * ns.z * ns.z);",
+    "  vec4 x_ = floor(j * ns.z);",
+    "  vec4 y_ = floor(j - 7.0 * x_);",
+    "  vec4 x = x_ *ns.x + ns.yyyy;",
+    "  vec4 y = y_ *ns.x + ns.yyyy;",
+    "  vec4 h = 1.0 - abs(x) - abs(y);",
+    "  vec4 b0 = vec4(x.xy, y.xy);",
+    "  vec4 b1 = vec4(x.zw, y.zw);",
+    "  vec4 s0 = floor(b0) * 2.0 + 1.0;",
+    "  vec4 s1 = floor(b1) * 2.0 + 1.0;",
+    "  vec4 sh = -step(h, vec4(0.0));",
+    "  vec4 a0 = b0.xzyw + s0.xzyw * sh.xxyy;",
+    "  vec4 a1 = b1.xzyw + s1.xzyw * sh.zzww;",
+    "  vec3 p0 = vec3(a0.xy, h.x);",
+    "  vec3 p1 = vec3(a0.zw, h.y);",
+    "  vec3 p2 = vec3(a1.xy, h.z);",
+    "  vec3 p3 = vec3(a1.zw, h.w);",
+    "  vec4 norm = taylorInvSqrt(vec4(dot(p0, p0), dot(p1, p1), dot(p2, p2), dot(p3, p3)));",
+    "  p0 *= norm.x;",
+    "  p1 *= norm.y;",
+    "  p2 *= norm.z;",
+    "  p3 *= norm.w;",
+    "  vec4 m = max(0.6 - vec4(dot(x0, x0), dot(x1, x1), dot(x2, x2), dot(x3, x3)), 0.0);",
+    "  m = m * m;",
+    "  return 42.0 * dot(m*m, vec4(dot(p0, x0), dot(p1, x1), dot(p2, x2), dot(p3, x3)));",
+    "}",
+    "float Bayer2(vec2 a) {",
+    "  a = floor(a);",
+    "  return fract(a.x / 2.0 + a.y * a.y * 0.75);",
+    "}",
+    "#define Bayer4(a)  (Bayer2(0.5*(a))*0.25 + Bayer2(a))",
+    "#define Bayer8(a)  (Bayer4(0.5*(a))*0.25 + Bayer2(a))",
+    "#define Bayer16(a) (Bayer8(0.5*(a))*0.25 + Bayer2(a))",
+    "#define Bayer32(a) (Bayer16(0.5*(a))*0.25 + Bayer2(a))",
+    "void main() {",
+    "  vec2 uv = gl_FragCoord.xy / u_resolution;",
+    "  uv.x *= u_resolution.x / u_resolution.y;",
+    "  float t = u_time * 0.35;",
+    "  float n1 = snoise(vec3(uv * 1.5, t));",
+    "  float n2 = snoise(vec3(uv * 1.5 + 4.0, t * 1.1));",
+    "  float gray = mix(n1, n2, 0.5) * 0.5 + 0.5;",
+    "  float d = step(Bayer32(gl_FragCoord.xy * uScale), gray);",
+    "  vec3 finalColor = mix(u_colorFront, u_colorBack, d);",
+    "  gl_FragColor = vec4(finalColor, 1.0);",
+    "}",
+  ].join("\n");
+
+  var STATIC_FRAME_T = 6;
+
+  function hexToRgb(hex) {
+    hex = hex.replace(/^#/, "");
+    if (hex.length === 3)
+      hex = hex.split("").map(function (c) { return c + c; }).join("");
+    return [
+      parseInt(hex.slice(0, 2), 16) / 255,
+      parseInt(hex.slice(2, 4), 16) / 255,
+      parseInt(hex.slice(4, 6), 16) / 255,
+    ];
+  }
+
+  function compileShader(gl, type, src) {
+    var s = gl.createShader(type);
+    if (!s) return null;
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error("DitherEffect shader error:", gl.getShaderInfoLog(s));
+      gl.deleteShader(s);
+      return null;
+    }
+    return s;
+  }
+
+  function createProgram(gl, vsSrc, fsSrc) {
+    var vs = compileShader(gl, gl.VERTEX_SHADER, vsSrc);
+    var fs = compileShader(gl, gl.FRAGMENT_SHADER, fsSrc);
+    if (!vs || !fs) return null;
+    var prog = gl.createProgram();
+    if (!prog) return null;
+    gl.attachShader(prog, vs);
+    gl.attachShader(prog, fs);
+    gl.linkProgram(prog);
+    gl.detachShader(prog, vs);
+    gl.detachShader(prog, fs);
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      console.error("DitherEffect link error:", gl.getProgramInfoLog(prog));
+      gl.deleteProgram(prog);
+      return null;
+    }
+    return prog;
+  }
+
+  function init(canvas) {
+    var scale = parseFloat(canvas.getAttribute("data-scale") || "0.8");
+    var speed = parseFloat(canvas.getAttribute("data-speed") || "1");
+    var colorFront = canvas.getAttribute("data-front") || "#1F2DE6";
+    var colorBack = canvas.getAttribute("data-back") || "#ffffff";
+
+    var gl = canvas.getContext("webgl", { alpha: false });
+    if (!gl) return;
+
+    var prog = createProgram(gl, VERT, FRAG);
+    if (!prog) return;
+
+    var buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 1, 0]),
+      gl.STATIC_DRAW
+    );
+
+    var aPos = gl.getAttribLocation(prog, "aPosition");
+    gl.enableVertexAttribArray(aPos);
+    gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 12, 0);
+
+    var uRes = gl.getUniformLocation(prog, "u_resolution");
+    var uTime = gl.getUniformLocation(prog, "u_time");
+    var uScale = gl.getUniformLocation(prog, "uScale");
+    var uFront = gl.getUniformLocation(prog, "u_colorFront");
+    var uBack = gl.getUniformLocation(prog, "u_colorBack");
+
+    var startTime = performance.now();
+    var reduceMotion = false;
+    try {
+      reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    } catch (e) {}
+
+    var paused = document.hidden;
+    var inView = true;
+    var frameQueued = false;
+    var colors = { front: hexToRgb(colorFront), back: hexToRgb(colorBack) };
+
+    function scheduleFrame() {
+      if (frameQueued || paused || !inView) return;
+      frameQueued = true;
+      requestAnimationFrame(render);
+    }
+
+    function render(now) {
+      frameQueued = false;
+      if (paused || !inView) return;
+      var t = reduceMotion ? STATIC_FRAME_T : ((now - startTime) / 1000) * speed;
+      gl.useProgram(prog);
+      gl.uniform2f(uRes, canvas.width, canvas.height);
+      gl.uniform1f(uTime, t);
+      gl.uniform1f(uScale, scale);
+      gl.uniform3fv(uFront, colors.front);
+      gl.uniform3fv(uBack, colors.back);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+      if (!reduceMotion) scheduleFrame();
+    }
+
+    function applyColors() {
+      var isDark = false;
+      try {
+        isDark = document.documentElement.getAttribute("data-theme") === "dark";
+      } catch (e) {}
+      colors = isDark
+        ? { front: hexToRgb("#2B3BF0"), back: hexToRgb("#141419") }
+        : { front: hexToRgb(colorFront), back: hexToRgb(colorBack) };
+    }
+    applyColors();
+    try {
+      new MutationObserver(function () {
+        applyColors();
+        scheduleFrame();
+      }).observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ["data-theme"],
+      });
+    } catch (e) {}
+
+    function resize() {
+      var rect = canvas.getBoundingClientRect();
+      canvas.width = Math.max(1, Math.floor(rect.width * 0.5));
+      canvas.height = Math.max(1, Math.floor(rect.height * 0.5));
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      scheduleFrame();
+    }
+    resize();
+    window.addEventListener("resize", resize);
+
+    document.addEventListener("visibilitychange", function () {
+      paused = document.hidden;
+      if (!paused) scheduleFrame();
+    });
+
+    if ("IntersectionObserver" in window) {
+      new IntersectionObserver(function (entries) {
+        inView = entries[0] ? entries[0].isIntersecting : true;
+        if (inView) scheduleFrame();
+      }).observe(canvas);
+    }
+
+    scheduleFrame();
+  }
+
+  var canvases = document.querySelectorAll("canvas[data-dither]");
+  for (var i = 0; i < canvases.length; i++) init(canvases[i]);
+})();
+</script>
+</body>
+</html>
