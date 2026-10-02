@@ -1,18 +1,16 @@
 import { cache } from "react";
-import type { Db } from "mongodb";
-import { AppDoc, col, Collections, getDb } from "@/lib/mongo";
+import { and, desc, eq } from "drizzle-orm";
+import { getDb, schema, type Db } from "@/db/client";
 import { readSessionToken, resolveSession } from "@/lib/session";
 import type { Viewer } from "@/lib/api-auth";
 import { redactPii } from "@/lib/redact";
 
 /**
- * Authorization core (MongoDB edition).
- *
- * Same public API as the old supabase-user module — getSessionUser,
+ * Authorization core. Same public API as before — getSessionUser,
  * getViewerRole, getNavSession, requireOwnerDb, requireHrDb — so route
  * handlers and pages keep their contracts. Sessions come from the
- * httpOnly `tammy_session` cookie resolved against the `sessions`
- * collection; identity rows come from the `users` collection.
+ * httpOnly `tammy_session` cookie resolved against the `sessions` table;
+ * identity rows come from `users`.
  */
 
 export type UserRow = {
@@ -21,7 +19,7 @@ export type UserRow = {
   role: string;
   status: string;
   email_verified: boolean;
-  created_at: string | Date;
+  created_at: string;
 };
 
 export type EmployerRow = {
@@ -43,14 +41,12 @@ export type SessionUser = {
 
 /** Owner-scoped handle: the caller owns `candidateId`. */
 export type OwnerDb = {
-  client: Db;
   user: SessionUser;
   candidateId: string;
 };
 
 /** HR-scoped handle: verified employer `employerId`. */
 export type HrDb = {
-  client: Db;
   user: SessionUser;
   employerId: string;
 };
@@ -89,67 +85,64 @@ function logErr(scope: string, e: unknown): void {
   console.error(`[auth-user] ${scope} detail=${redactPii(msg.slice(0, 200))}`);
 }
 
-/** Raw Mongo `users` doc → UserRow DTO. */
-function toUserRow(doc: Record<string, unknown> | null): UserRow | null {
-  if (!doc) return null;
-  return {
-    id: String(doc._id ?? doc.id ?? ""),
-    email: String(doc.email ?? ""),
-    role: String(doc.role ?? ""),
-    status: String(doc.status ?? "active"),
-    email_verified: doc.email_verified === true,
-    created_at: (doc.created_at as string | Date | undefined) ?? new Date(0),
-  };
-}
-
-/** Server-side Mongo handle for data access (no RLS — checks are explicit). */
+/** Server-side database handle for data access (checks are explicit). */
 export async function userDb(): Promise<Db> {
   return getDb();
 }
 
 export async function loadSessionUserById(userId: string): Promise<SessionUser | null> {
-  const users = await col<AppDoc>(Collections.users);
-  const raw = await users.findOne({ _id: userId });
-  const userRow = toUserRow(raw);
+  const db = await getDb();
+  const rows = await db
+    .select()
+    .from(schema.users)
+    .where(eq(schema.users.id, userId))
+    .limit(1);
+  const raw = rows[0];
   const email = normalizeEmail(raw?.email);
-  if (!userRow || !email) return null;
+  if (!raw || !email) return null;
+
+  const userRow: UserRow = {
+    id: raw.id,
+    email,
+    role: raw.role,
+    status: raw.status,
+    email_verified: raw.email_verified,
+    created_at: raw.created_at,
+  };
 
   let employer: EmployerRow | null = null;
   let candidateId: string | null = null;
 
-  if (userRow.role === "employer" || userRow.role === "candidate") {
-    if (userRow.role === "employer") {
-      try {
-        const employers = await col<Record<string, unknown>>(Collections.employers);
-        const rows = await employers
-          .find({ user_id: userRow.id })
-          .sort({ created_at: -1 })
-          .limit(10)
-          .toArray();
-        const mapped = rows.map((r) => ({
-          id: String(r._id),
-          user_id: r.user_id != null ? String(r.user_id) : null,
-          company_name: String(r.company_name ?? ""),
-          company_email: r.company_email != null ? String(r.company_email) : null,
-          verification_status: String(r.verification_status ?? "pending"),
-        })) satisfies EmployerRow[];
-        employer =
-          mapped.find((r) => r.verification_status === "verified") ?? mapped[0] ?? null;
-      } catch (e) {
-        logErr("employer read failed", e);
-      }
-    } else {
-      try {
-        const candidates = await col<{ _id: string }>(Collections.candidates);
-        const row = await candidates
-          .find({ user_id: userRow.id })
-          .sort({ created_at: -1 })
-          .limit(1)
-          .next();
-        candidateId = row?._id ?? null;
-      } catch (e) {
-        logErr("candidate read failed", e);
-      }
+  if (userRow.role === "employer") {
+    try {
+      const rows = await db
+        .select()
+        .from(schema.employers)
+        .where(eq(schema.employers.user_id, userRow.id))
+        .orderBy(desc(schema.employers.created_at))
+        .limit(10);
+      const mapped = rows.map((r) => ({
+        id: r.id,
+        user_id: r.user_id,
+        company_name: r.company_name,
+        company_email: r.company_email,
+        verification_status: r.verification_status,
+      }));
+      employer = mapped.find((r) => r.verification_status === "verified") ?? mapped[0] ?? null;
+    } catch (e) {
+      logErr("employer read failed", e);
+    }
+  } else if (userRow.role === "candidate") {
+    try {
+      const rows = await db
+        .select({ id: schema.candidates.id })
+        .from(schema.candidates)
+        .where(eq(schema.candidates.user_id, userRow.id))
+        .orderBy(desc(schema.candidates.created_at))
+        .limit(1);
+      candidateId = rows[0]?.id ?? null;
+    } catch (e) {
+      logErr("candidate read failed", e);
     }
   }
 
@@ -204,17 +197,19 @@ export const getNavSession = cache(async (): Promise<NavSession | null> => {
   if (!token) return null;
   const resolved = await resolveSession(token);
   if (!resolved) return null;
-  const users = await col<AppDoc>(Collections.users);
-  const raw = await users.findOne(
-    { _id: resolved.userId },
-    { projection: { email: 1, role: 1 } },
-  );
+  const db = await getDb();
+  const rows = await db
+    .select({ email: schema.users.email, role: schema.users.role })
+    .from(schema.users)
+    .where(eq(schema.users.id, resolved.userId))
+    .limit(1);
+  const raw = rows[0];
   const email = normalizeEmail(raw?.email);
   if (!raw || !email) return null;
   return {
     authId: resolved.userId,
     email,
-    role: typeof raw.role === "string" ? raw.role : null,
+    role: raw.role,
   };
 });
 
@@ -246,15 +241,20 @@ export async function requireOwnerDb(
     );
   }
   try {
-    const candidates = await col<{ _id: string; user_id: string | null }>(
-      Collections.candidates,
-    );
-    const filter: Record<string, unknown> = { _id: candidateId };
-    if (session.userRow.role !== "admin") {
-      filter.user_id = session.userRow.id;
-    }
-    const row = await candidates.findOne(filter, { projection: { _id: 1 } });
-    if (!row) {
+    const db = await getDb();
+    const cond =
+      session.userRow.role === "admin"
+        ? eq(schema.candidates.id, candidateId)
+        : and(
+            eq(schema.candidates.id, candidateId),
+            eq(schema.candidates.user_id, session.userRow.id),
+          );
+    const rows = await db
+      .select({ id: schema.candidates.id })
+      .from(schema.candidates)
+      .where(cond)
+      .limit(1);
+    if (!rows[0]) {
       return Response.json(
         { error: "You can only modify your own profile." },
         { status: 403 },
@@ -267,16 +267,7 @@ export async function requireOwnerDb(
       { status: 500 },
     );
   }
-  try {
-    const client = await getDb();
-    return { client, user: session, candidateId };
-  } catch (e) {
-    logErr("owner db failed", e);
-    return Response.json(
-      { error: "Something went wrong. Try again." },
-      { status: 500 },
-    );
-  }
+  return { user: session, candidateId };
 }
 
 export async function requireHrDb(
@@ -298,49 +289,26 @@ export async function requireHrDb(
     return Response.json({ error: "Employer verification required." }, { status: 403 });
   }
   try {
-    const client = await getDb();
-    const employers = await col<{ _id: string }>(Collections.employers);
-    const row = await employers.findOne(
-      { user_id: userRow.id, verification_status: "verified" },
-      { projection: { _id: 1 } },
-    );
+    const db = await getDb();
+    const rows = await db
+      .select({ id: schema.employers.id })
+      .from(schema.employers)
+      .where(
+        and(
+          eq(schema.employers.user_id, userRow.id),
+          eq(schema.employers.verification_status, "verified"),
+        ),
+      )
+      .limit(1);
+    const row = rows[0];
     if (!row) {
       return Response.json({ error: "Employer verification required." }, { status: 403 });
     }
-    return { client, user: session, employerId: row._id };
+    return { user: session, employerId: row.id };
   } catch (e) {
     logErr("hr check failed", e);
     return Response.json({ error: "Something went wrong. Try again." }, { status: 500 });
   }
-}
-
-declare global {
-  var __tammyAuthIndexes: Promise<unknown> | undefined;
-}
-
-/**
- * Indexes the auth path depends on: unique login email and the session
- * TTL sweep. Runs once per process; a failure is logged and retried on
- * the next call so a transient Mongo hiccup never wedges login.
- */
-export async function ensureAuthIndexes(): Promise<void> {
-  if (!globalThis.__tammyAuthIndexes) {
-    globalThis.__tammyAuthIndexes = (async () => {
-      try {
-        const db = await getDb();
-        await Promise.all([
-          db.collection(Collections.users).createIndex({ email: 1 }, { unique: true }),
-          db
-            .collection(Collections.sessions)
-            .createIndex({ expires_at: 1 }, { expireAfterSeconds: 0 }),
-        ]);
-      } catch (e) {
-        globalThis.__tammyAuthIndexes = undefined; // retry on the next call
-        logErr("index ensure failed", e);
-      }
-    })();
-  }
-  await globalThis.__tammyAuthIndexes;
 }
 
 /** Map an employer row to the three-state status the login UI branches on. */
@@ -386,8 +354,7 @@ export type AuthSessionPayload = {
 /**
  * SessionUser → `/api/auth/me` response. Role-based (candidate → owner
  * viewer even without a linked profile) so it always agrees with the SSR
- * nav mapping in lib/hr-session — the avatar must never flip to Login
- * after hydration.
+ * nav mapping — the avatar must never flip to Login after hydration.
  */
 export function authSessionPayload(session: SessionUser): AuthSessionPayload {
   const row = session.userRow;

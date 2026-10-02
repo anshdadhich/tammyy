@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { randomUUID } from "crypto";
-import { AppDoc, col, Collections } from "@/lib/mongo";
+import { desc, eq } from "drizzle-orm";
+import { getDb, schema } from "@/db/client";
 import { getSessionUser } from "@/lib/auth-user";
 import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { normalizeEmail } from "@/lib/validators";
@@ -34,7 +35,7 @@ function validLinkedin(v: string): boolean {
 }
 
 export async function POST(request: Request) {
-  const rl = rateLimit(request, { key: "employers-register", limit: 10, windowMs: 10 * 60_000 });
+  const rl = await rateLimit(request, { key: "employers-register", limit: 10, windowMs: 10 * 60_000 });
   if (!rl.ok) return rateLimitResponse(rl.retryAfterMs);
   const session = await getSessionUser();
   if (!session || !session.userRow) {
@@ -56,38 +57,42 @@ export async function POST(request: Request) {
   if (!validLinkedin(parsed.data.linkedin_url)) {
     return Response.json({ error: "Enter a valid LinkedIn profile or company URL." }, { status: 400 });
   }
-  let existing: AppDoc | null = null;
+  let existing: { id: string; verification_status: string } | undefined;
   try {
-    const employers = await col<AppDoc>(Collections.employers);
-    existing = await employers.findOne(
-      { user_id: session.userRow.id },
-      { sort: { created_at: -1 }, projection: { verification_status: 1 } },
-    );
+    const db = await getDb();
+    const rows = await db
+      .select({
+        id: schema.employers.id,
+        verification_status: schema.employers.verification_status,
+      })
+      .from(schema.employers)
+      .where(eq(schema.employers.user_id, session.userRow.id))
+      .orderBy(desc(schema.employers.created_at))
+      .limit(1);
+    existing = rows[0];
   } catch {
-    existing = null;
+    existing = undefined;
   }
-  if (existing?._id) {
+  if (existing?.id) {
     return Response.json({
-      employerId: existing._id,
+      employerId: existing.id,
       status: String(existing.verification_status ?? "pending"),
     });
   }
   const companyEmail = parsed.data.company_email ? normalizeEmail(parsed.data.company_email) : "";
   let createdId: string | null = null;
   try {
-    const employers = await col<AppDoc>(Collections.employers);
-    const res = await employers.insertOne({
-      _id: randomUUID(),
+    const db = await getDb();
+    createdId = randomUUID();
+    await db.insert(schema.employers).values({
+      id: createdId,
       user_id: session.userRow.id,
       company_name: parsed.data.company_name,
       company_email: companyEmail || session.email,
       website: parsed.data.website,
       linkedin_url: parsed.data.linkedin_url,
       verification_status: "pending",
-      created_at: new Date(),
-      updated_at: new Date(),
     });
-    createdId = res.insertedId;
   } catch {
     createdId = null;
   }
@@ -100,20 +105,22 @@ export async function POST(request: Request) {
     // role would silently brick the owner's own talent page (viewerFor drops
     // the owner branch for employer/admin roles), so require a separate email
     // for hiring instead of destroying profile access.
-    let owned: { _id: string } | null = null;
+    let owned: { id: string } | undefined;
     try {
-      const candidates = await col<{ _id: string }>(Collections.candidates);
-      owned = await candidates.findOne(
-        { user_id: session.userRow.id },
-        { projection: { _id: 1 } },
-      );
+      const db = await getDb();
+      const rows = await db
+        .select({ id: schema.candidates.id })
+        .from(schema.candidates)
+        .where(eq(schema.candidates.user_id, session.userRow.id))
+        .limit(1);
+      owned = rows[0];
     } catch {
-      owned = null;
+      owned = undefined;
     }
-    if (owned?._id) {
+    if (owned?.id) {
       try {
-        const employers = await col<AppDoc>(Collections.employers);
-        await employers.deleteOne({ _id: employerId });
+        const db = await getDb();
+        await db.delete(schema.employers).where(eq(schema.employers.id, employerId));
       } catch {
       }
       return Response.json(
@@ -122,8 +129,11 @@ export async function POST(request: Request) {
       );
     }
     try {
-      const users = await col<AppDoc>(Collections.users);
-      await users.updateOne({ _id: session.userRow.id }, { $set: { role: "employer" } });
+      const db = await getDb();
+      await db
+        .update(schema.users)
+        .set({ role: "employer" })
+        .where(eq(schema.users.id, session.userRow.id));
     } catch {
     }
   }

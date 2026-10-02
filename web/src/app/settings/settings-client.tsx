@@ -39,9 +39,9 @@ export default function SettingsClient({ viewer, hr }: Props) {
     setError("");
     try {
       const res = await fetch("/api/auth/logout", { method: "POST" });
-      const json = await res.json().catch(() => ({}));
+      const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
       if (!res.ok) {
-        setError(json.error || "Something went wrong");
+        setError(typeof json.error === "string" ? json.error : "Something went wrong");
         return;
       }
       router.refresh();

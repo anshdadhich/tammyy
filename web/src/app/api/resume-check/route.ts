@@ -29,7 +29,7 @@ function urlSafe(u: URL): boolean {
 }
 
 export async function GET(request: Request) {
-  const rl = rateLimit(request, { key: "resume-check", limit: 30, windowMs: 10 * 60_000 });
+  const rl = await rateLimit(request, { key: "resume-check", limit: 30, windowMs: 10 * 60_000 });
   if (!rl.ok) return rateLimitResponse(rl.retryAfterMs);
   const session = await getSessionUser();
   if (!session) {

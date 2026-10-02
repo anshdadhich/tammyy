@@ -1,73 +1,13 @@
-import { randomBytes, scrypt, timingSafeEqual } from "crypto";
-import { promisify } from "util";
-
-const scryptAsync = promisify(scrypt) as (
-  password: string | Buffer,
-  salt: string | Buffer,
-  keylen: number,
-  options: { N: number; r: number; p: number; maxmem: number },
-) => Promise<Buffer>;
-
-/**
- * Password hashing with Node's built-in scrypt — no native addon, no extra
- * dependency, memory-hard and part of the platform.
- *
- * Stored format: `scrypt$N$r$p$<salt-base64>$<hash-base64>`
- */
+import { scryptAsync } from "@noble/hashes/scrypt.js";
+import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
+import { cfEnv } from "@/lib/cf";
 
 const N = 16384;
 const R = 8;
 const P = 1;
 const KEYLEN = 64;
-const MAXMEM = 64 * 1024 * 1024; // 64MB — scrypt needs > 128*N*r bytes
+const MAXMEM = 128 * 1024 * 1024;
 
-export async function hashPassword(password: string): Promise<string> {
-  const salt = randomBytes(16);
-  const derived = await scryptAsync(password.normalize("NFKC"), salt, KEYLEN, {
-    N,
-    r: R,
-    p: P,
-    maxmem: MAXMEM,
-  });
-  return `scrypt$${N}$${R}$${P}$${salt.toString("base64")}$${derived.toString("base64")}`;
-}
-
-export async function verifyPassword(
-  password: string,
-  stored: string | null | undefined,
-): Promise<boolean> {
-  if (!stored) return false;
-  const parts = stored.split("$");
-  if (parts.length !== 6 || parts[0] !== "scrypt") return false;
-  const [, nStr, rStr, pStr, saltB64, hashB64] = parts;
-  const n = Number(nStr);
-  const r = Number(rStr);
-  const p = Number(pStr);
-  if (!Number.isInteger(n) || !Number.isInteger(r) || !Number.isInteger(p)) return false;
-  let salt: Buffer;
-  let expected: Buffer;
-  try {
-    salt = Buffer.from(saltB64, "base64");
-    expected = Buffer.from(hashB64, "base64");
-  } catch {
-    return false;
-  }
-  if (expected.length === 0) return false;
-  let derived: Buffer;
-  try {
-    derived = await scryptAsync(password.normalize("NFKC"), salt, expected.length, {
-      N: n,
-      r,
-      p,
-      maxmem: MAXMEM,
-    });
-  } catch {
-    return false;
-  }
-  return derived.length === expected.length && timingSafeEqual(derived, expected);
-}
-
-/** Minimum policy enforced at every signup/login entry point. */
 export function passwordPolicyError(password: unknown): string | null {
   if (typeof password !== "string" || password.length < 8) {
     return "Password must be at least 8 characters.";
@@ -76,4 +16,75 @@ export function passwordPolicyError(password: unknown): string | null {
     return "Password must be at most 200 characters.";
   }
   return null;
+}
+
+function derive(password: string, saltHex: string, n: number, r: number, p: number, keylen: number): Promise<Uint8Array> {
+  return scryptAsync(password.normalize("NFKC"), hexToBytes(saltHex), {
+    N: n,
+    r,
+    p,
+    dkLen: keylen,
+    maxmem: MAXMEM,
+  });
+}
+
+export async function hashPassword(password: string): Promise<string> {
+  const salt = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
+  const derived = await derive(password, salt, N, R, P, KEYLEN);
+  return `scrypt$${N}$${R}$${P}$${salt}$${bytesToHex(derived)}`;
+}
+
+export async function verifyPassword(password: string, stored: string | null | undefined): Promise<boolean> {
+  if (!stored) return false;
+  const parts = stored.split("$");
+  if (parts.length !== 6 || parts[0] !== "scrypt") return false;
+  const [, nStr, rStr, pStr, saltHex, hashHex] = parts;
+  const n = Number(nStr);
+  const r = Number(rStr);
+  const p = Number(pStr);
+  if (!Number.isInteger(n) || !Number.isInteger(r) || !Number.isInteger(p)) return false;
+  if (n <= 1 || (n & (n - 1)) !== 0 || r < 1 || p < 1) return false;
+  if (!/^[0-9a-f]+$/i.test(saltHex) || !/^[0-9a-f]+$/i.test(hashHex)) return false;
+  if (hashHex.length === 0 || hashHex.length % 2 !== 0) return false;
+  try {
+    const derived = await derive(password, saltHex, n, r, p, hashHex.length / 2);
+    const expected = hexToBytes(hashHex);
+    if (derived.length !== expected.length) return false;
+    let diff = 0;
+    for (let i = 0; i < derived.length; i++) diff |= derived[i] ^ expected[i];
+    return diff === 0;
+  } catch {
+    return false;
+  }
+}
+
+export type HasherOp = { op: "hash"; password: string } | { op: "verify"; password: string; stored: string };
+
+export type HasherResult = { hash: string } | { valid: boolean };
+
+/**
+ * scrypt burns ~100ms of CPU, far past the Worker request budget on the
+ * free plan, so auth routes run it inside the PasswordHasher Durable
+ * Object, which gets its own 30s CPU budget per invocation.
+ */
+export async function hashPasswordRemote(password: string): Promise<string> {
+  const env = await cfEnv();
+  const stub = env.PASSWORD_HASHER.getByName("auth");
+  const res = (await stub.fetch("https://do/", {
+    method: "POST",
+    body: JSON.stringify({ op: "hash", password } satisfies HasherOp),
+  }).then((r: Response) => r.json())) as HasherResult;
+  if (!("hash" in res)) throw new Error("password hashing failed");
+  return res.hash;
+}
+
+export async function verifyPasswordRemote(password: string, stored: string | null | undefined): Promise<boolean> {
+  if (!stored) return false;
+  const env = await cfEnv();
+  const stub = env.PASSWORD_HASHER.getByName("auth");
+  const res = (await stub.fetch("https://do/", {
+    method: "POST",
+    body: JSON.stringify({ op: "verify", password, stored } satisfies HasherOp),
+  }).then((r: Response) => r.json())) as HasherResult;
+  return "valid" in res ? res.valid : false;
 }

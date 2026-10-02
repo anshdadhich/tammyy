@@ -81,8 +81,9 @@ export default function ResultsView({
                         return (
                           <button
                             type="button"
-                            className="sq-cand"
+                            className="sq-cand stage-row"
                             key={row.id}
+                            style={{ "--i": index } as React.CSSProperties}
                             data-sel={isSel ? "true" : undefined}
                             aria-pressed={isSel}
                             onClick={() => onSelectCandidate(row.id)}
@@ -155,7 +156,9 @@ export default function ResultsView({
 
           <div className="sq-detail-body">
             {showDetail && selected ? (
-              <CandidateDetail key={selected.id} row={selected} onBack={onBack} />
+              <div key={selected.id} className="detail-swap">
+              <CandidateDetail row={selected} onBack={onBack} />
+            </div>
             ) : active.results.length === 0 ? (
               <div className="sq-empty">
                 <p className="sq-empty-title">No matches yet</p>

@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { randomUUID } from "crypto";
 import { after } from "next/server";
-import type { Filter } from "mongodb";
-import { AppDoc, col, Collections } from "@/lib/mongo";
+import { and, desc, eq, inArray, isNull, lt, or } from "drizzle-orm";
+import { getDb, schema, type Db } from "@/db/client";
 import { newMatchEmail, sendEmail } from "@/lib/email";
 import { requireHrDb, getSessionUser } from "@/lib/auth-user";
 import { rateLimitRoute } from "@/lib/rate-limit";
@@ -33,42 +33,19 @@ const removeByIdSchema = z.object({ id: uuid });
 
 const AUDIT_ACTIONS = ["search", "profile_view", "contact", "shortlist", "export", "profile_update", "upload"] as const;
 
-/** `shortlists` row (Postgres columns kept verbatim, `_id` = former `id`). */
-type ShortlistDoc = {
-  _id: string;
+type ShortlistRow = {
+  id: string;
   employer_id: string | null;
   candidate_id: string;
   job_id: string | null;
-  status: string;
+  status: string | null;
   notes: string | null;
-  created_at: Date | string;
+  created_at: string;
 };
 
-type JobDoc = { _id: string; employer_id: string | null; title?: string | null };
-
-type CandidateDoc = {
-  _id: string;
-  full_name?: string | null;
-  headline?: string | null;
-  contact_email?: string | null;
-};
-
-const SHORTLIST_PROJECTION = {
-  employer_id: 1,
-  candidate_id: 1,
-  job_id: 1,
-  status: 1,
-  notes: 1,
-  created_at: 1,
-} as const;
-
-function isoOf(v: Date | string): string {
-  return v instanceof Date ? v.toISOString() : new Date(v).toISOString();
-}
-
-function serializeShortlist(r: ShortlistDoc): Record<string, unknown> {
+function serializeShortlist(r: ShortlistRow): Record<string, unknown> {
   return {
-    id: r._id,
+    id: r.id,
     employer_id: r.employer_id ?? null,
     candidate_id: r.candidate_id,
     job_id: r.job_id ?? null,
@@ -83,15 +60,21 @@ async function auditBestEffort(
 ): Promise<void> {
   if (!(AUDIT_ACTIONS as readonly string[]).includes(row.action)) return;
   try {
-    const auditLogs = await col<AppDoc>(Collections.auditLogs);
-    await auditLogs.insertOne({ _id: randomUUID(), ...row, created_at: new Date() });
+    const db = await getDb();
+    await db.insert(schema.auditLogs).values({
+      id: randomUUID(),
+      action: row.action,
+      target_type: row.target_type,
+      target_id: row.target_id,
+      metadata_json: row.metadata,
+    });
   } catch {}
 }
 
 export async function GET(request: Request) {
   const wev = startWideEvent("shortlists", "GET");
   const session = await getSessionUser();
-  const limited = rateLimitRoute(request, {
+  const limited = await rateLimitRoute(request, {
     key: "shortlists-get",
     limit: 120,
     windowMs: 60_000,
@@ -124,34 +107,46 @@ export async function GET(request: Request) {
   }
   const pageSize = parsed.data.limit ?? 50;
   const employerId = hr.employerId;
-  const filter: Filter<ShortlistDoc> = { employer_id: employerId };
-  if (parsed.data.candidate_id) filter.candidate_id = parsed.data.candidate_id;
-  if (parsed.data.job_id) filter.job_id = parsed.data.job_id;
+
+  const conds = [eq(schema.shortlists.employer_id, employerId)];
+  if (parsed.data.candidate_id) conds.push(eq(schema.shortlists.candidate_id, parsed.data.candidate_id));
+  if (parsed.data.job_id) conds.push(eq(schema.shortlists.job_id, parsed.data.job_id));
   if (parsed.data.cursor) {
     const c = decodeCursor(parsed.data.cursor);
     if (!c) {
       wev.end({ status: 400 });
       return Response.json({ error: "Invalid cursor." }, { status: 400 });
     }
-    filter.$or = [
-      { created_at: { $lt: new Date(c.createdAt) } },
-      { created_at: new Date(c.createdAt), _id: { $lt: c.id } },
-    ];
+    conds.push(
+      or(
+        lt(schema.shortlists.created_at, c.createdAt),
+        and(
+          eq(schema.shortlists.created_at, c.createdAt),
+          lt(schema.shortlists.id, c.id),
+        ),
+      )!,
+    );
   }
-  let rows: ShortlistDoc[] = [];
+
+  let rows: ShortlistRow[] = [];
   try {
-    const shortlists = await col<ShortlistDoc>(Collections.shortlists);
-    let q = shortlists
-      .find(filter, { projection: SHORTLIST_PROJECTION })
-      .sort({ created_at: -1, _id: -1 });
-    if (parsed.data.cursor) {
-      q = q.limit(pageSize + 1);
-    } else if (parsed.data.offset !== undefined) {
-      q = q.skip(parsed.data.offset).limit(pageSize + 1);
-    } else {
-      q = q.limit(pageSize + 1);
-    }
-    rows = await q.toArray();
+    const db = await getDb();
+    const found = await db
+      .select({
+        id: schema.shortlists.id,
+        employer_id: schema.shortlists.employer_id,
+        candidate_id: schema.shortlists.candidate_id,
+        job_id: schema.shortlists.job_id,
+        status: schema.shortlists.status,
+        notes: schema.shortlists.notes,
+        created_at: schema.shortlists.created_at,
+      })
+      .from(schema.shortlists)
+      .where(and(...conds))
+      .orderBy(desc(schema.shortlists.created_at), desc(schema.shortlists.id))
+      .offset(parsed.data.offset ?? 0)
+      .limit(pageSize + 1);
+    rows = found;
   } catch {
     console.error("[shortlists] list failed");
     wev.add({ degraded: true });
@@ -159,8 +154,7 @@ export async function GET(request: Request) {
     return Response.json({ error: "shortlist list failed" }, { status: 500 });
   }
   const page = rows.slice(0, pageSize);
-  // Former embedded join `candidates(id, full_name, headline)` → $in query.
-  const candById = new Map<string, CandidateDoc>();
+  const candById = new Map<string, { id: string; full_name: string | null; headline: string | null }>();
   try {
     const ids = [
       ...new Set(
@@ -170,11 +164,16 @@ export async function GET(request: Request) {
       ),
     ];
     if (ids.length > 0) {
-      const candidates = await col<CandidateDoc>(Collections.candidates);
-      const found = await candidates
-        .find({ _id: { $in: ids } }, { projection: { full_name: 1, headline: 1 } })
-        .toArray();
-      for (const c of found) candById.set(c._id, c);
+      const db = await getDb();
+      const found = await db
+        .select({
+          id: schema.candidates.id,
+          full_name: schema.candidates.full_name,
+          headline: schema.candidates.headline,
+        })
+        .from(schema.candidates)
+        .where(inArray(schema.candidates.id, ids));
+      for (const c of found) candById.set(c.id, c);
     }
   } catch {
     // embed degrades to null; the shortlist rows themselves still ship
@@ -185,7 +184,7 @@ export async function GET(request: Request) {
       ...serializeShortlist(r),
       candidates: c
         ? {
-            id: c._id,
+            id: c.id,
             full_name: c.full_name ?? null,
             headline: c.headline ?? null,
           }
@@ -193,9 +192,7 @@ export async function GET(request: Request) {
     };
   });
   const nextCursor =
-    rows.length > pageSize
-      ? encodeCursor(isoOf(rows[pageSize - 1].created_at), rows[pageSize - 1]._id)
-      : null;
+    rows.length > pageSize ? encodeCursor(rows[pageSize - 1].created_at, rows[pageSize - 1].id) : null;
   wev.add({ degraded: false });
   wev.end({ status: 200 });
   return Response.json({ results, nextCursor, degraded: false });
@@ -204,7 +201,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const wev = startWideEvent("shortlists", "POST");
   const session = await getSessionUser();
-  const limited = rateLimitRoute(request, {
+  const limited = await rateLimitRoute(request, {
     key: "shortlists-post",
     limit: 30,
     windowMs: 10 * 60_000,
@@ -230,75 +227,83 @@ export async function POST(request: Request) {
   const { candidate_id, job_id, notes } = parsed.data;
   const employerId = hr.employerId;
 
-  // Existence checks; a read failure falls into the same branches the old
-  // `.maybeSingle()` error→null paths took.
-  let candRow: { _id: string } | null = null;
-  let jobRow: JobDoc | null = null;
+  let candRow: { id: string } | undefined;
+  let jobRow: { id: string; employer_id: string | null } | undefined;
   try {
-    const candidates = await col<{ _id: string }>(Collections.candidates);
-    const jobs = await col<JobDoc>(Collections.jobs);
-    [candRow, jobRow] = await Promise.all([
-      candidates.findOne({ _id: candidate_id }, { projection: { _id: 1 } }),
-      job_id
-        ? jobs.findOne({ _id: job_id }, { projection: { employer_id: 1 } })
-        : Promise.resolve(null),
-    ]);
+    const db = await getDb();
+    [candRow] = await db
+      .select({ id: schema.candidates.id })
+      .from(schema.candidates)
+      .where(eq(schema.candidates.id, candidate_id))
+      .limit(1);
+    if (job_id) {
+      [jobRow] = await db
+        .select({ id: schema.jobs.id, employer_id: schema.jobs.employer_id })
+        .from(schema.jobs)
+        .where(eq(schema.jobs.id, job_id))
+        .limit(1);
+    }
   } catch {
-    candRow = null;
-    jobRow = null;
+    candRow = undefined;
+    jobRow = undefined;
   }
   if (!candRow) {
     wev.end({ status: 404 });
     return Response.json({ error: "candidate not found" }, { status: 404 });
   }
   if (job_id) {
-    const job = jobRow;
-    if (!job) {
+    if (!jobRow) {
       wev.end({ status: 404 });
       return Response.json({ error: "job not found" }, { status: 404 });
     }
-    if (job.employer_id !== employerId) {
+    if (jobRow.employer_id !== employerId) {
       wev.end({ status: 403 });
       return Response.json({ error: "Job does not belong to your organization." }, { status: 403 });
     }
   }
 
-  let existing: ShortlistDoc | null = null;
+  let saved: ShortlistRow | undefined;
   try {
-    const shortlists = await col<ShortlistDoc>(Collections.shortlists);
-    existing = await shortlists.findOne(
-      { employer_id: employerId, candidate_id, job_id: job_id ?? null },
-      { projection: SHORTLIST_PROJECTION },
-    );
+    const db = await getDb();
+    const inserted = await db
+      .insert(schema.shortlists)
+      .values({
+        id: randomUUID(),
+        employer_id: employerId,
+        candidate_id,
+        job_id: job_id ?? null,
+        status: "saved",
+        notes: notes || null,
+      })
+      .onConflictDoNothing()
+      .returning();
+    if (inserted[0]) {
+      saved = inserted[0];
+    } else {
+      [saved] = await db
+        .select({
+          id: schema.shortlists.id,
+          employer_id: schema.shortlists.employer_id,
+          candidate_id: schema.shortlists.candidate_id,
+          job_id: schema.shortlists.job_id,
+          status: schema.shortlists.status,
+          notes: schema.shortlists.notes,
+          created_at: schema.shortlists.created_at,
+        })
+        .from(schema.shortlists)
+        .where(
+          and(
+            eq(schema.shortlists.employer_id, employerId),
+            eq(schema.shortlists.candidate_id, candidate_id),
+            job_id
+              ? eq(schema.shortlists.job_id, job_id)
+              : isNull(schema.shortlists.job_id),
+          ),
+        )
+        .limit(1);
+    }
   } catch {
-    existing = null;
-  }
-  if (existing) {
-    wev.add({ degraded: false });
-    wev.end({ status: 200 });
-    return Response.json({ shortlist: serializeShortlist(existing), deduped: true });
-  }
-
-  // Former UNIQUE(employer_id, candidate_id, job_id) insert → upsert.
-  let saved: ShortlistDoc | null = null;
-  try {
-    const shortlists = await col<ShortlistDoc>(Collections.shortlists);
-    saved = await shortlists.findOneAndUpdate(
-      { employer_id: employerId, candidate_id, job_id: job_id ?? null },
-      {
-        $setOnInsert: {
-          employer_id: employerId,
-          candidate_id,
-          job_id: job_id ?? null,
-          status: "saved",
-          notes: notes || null,
-          created_at: new Date(),
-        },
-      },
-      { upsert: true, returnDocument: "after" },
-    );
-  } catch {
-    saved = null;
+    saved = undefined;
   }
   if (!saved) {
     console.error("[shortlists] save failed");
@@ -306,21 +311,24 @@ export async function POST(request: Request) {
     wev.end({ status: 500, error: "shortlist save failed" });
     return Response.json({ error: "shortlist save failed" }, { status: 500 });
   }
-  const shortlistId = saved._id;
   await auditBestEffort({
     action: "shortlist",
     target_type: "shortlist",
-    target_id: shortlistId,
+    target_id: saved.id,
     metadata: { employer_id: employerId, candidate_id, job_id: job_id ?? null },
   });
   after(async () => {
     const bg = startWideEvent("shortlists", "POST-email");
     try {
-      const candidates = await col<CandidateDoc>(Collections.candidates);
-      const cc = await candidates.findOne(
-        { _id: candidate_id },
-        { projection: { full_name: 1, contact_email: 1 } },
-      );
+      const db = await getDb();
+      const [cc] = await db
+        .select({
+          full_name: schema.candidates.full_name,
+          contact_email: schema.candidates.contact_email,
+        })
+        .from(schema.candidates)
+        .where(eq(schema.candidates.id, candidate_id))
+        .limit(1);
       const em = cc?.contact_email;
       if (!em) {
         bg.add({ email_outcome: "skipped", email_reason: "no recipient", degraded: false });
@@ -330,36 +338,27 @@ export async function POST(request: Request) {
       let jobTitle = "a role you match";
       let companyName = "An employer";
       try {
+        const employerName = async (eid: string | null): Promise<string | null> => {
+          if (!eid) return null;
+          const rows = await db
+            .select({ company_name: schema.employers.company_name })
+            .from(schema.employers)
+            .where(eq(schema.employers.id, eid))
+            .limit(1);
+          const cn = rows[0]?.company_name;
+          return cn && cn.trim() ? cn.trim().slice(0, 120) : null;
+        };
         if (job_id) {
-          const jobs = await col<JobDoc>(Collections.jobs);
-          const jj = await jobs.findOne(
-            { _id: job_id },
-            { projection: { title: 1, employer_id: 1 } },
-          );
-          const jt = jj?.title;
+          const jj = await db
+            .select({ title: schema.jobs.title, employer_id: schema.jobs.employer_id })
+            .from(schema.jobs)
+            .where(eq(schema.jobs.id, job_id))
+            .limit(1);
+          const jt = jj[0]?.title;
           if (jt && jt.trim()) jobTitle = jt.trim().slice(0, 120);
-          const eid = jj?.employer_id ?? employerId;
-          if (eid) {
-            const employers = await col<{ _id: string; company_name?: string | null }>(
-              Collections.employers,
-            );
-            const ee = await employers.findOne(
-              { _id: eid },
-              { projection: { company_name: 1 } },
-            );
-            const cn = ee?.company_name;
-            if (cn && cn.trim()) companyName = cn.trim().slice(0, 120);
-          }
+          companyName = (await employerName(jj[0]?.employer_id ?? employerId)) ?? companyName;
         } else {
-          const employers = await col<{ _id: string; company_name?: string | null }>(
-            Collections.employers,
-          );
-          const ee = await employers.findOne(
-            { _id: employerId },
-            { projection: { company_name: 1 } },
-          );
-          const cn = ee?.company_name;
-          if (cn && cn.trim()) companyName = cn.trim().slice(0, 120);
+          companyName = (await employerName(employerId)) ?? companyName;
         }
       } catch {
       }
@@ -385,7 +384,7 @@ export async function POST(request: Request) {
 export async function DELETE(request: Request) {
   const wev = startWideEvent("shortlists", "DELETE");
   const session = await getSessionUser();
-  const limited = rateLimitRoute(request, {
+  const limited = await rateLimitRoute(request, {
     key: "shortlists-delete",
     limit: 60,
     windowMs: 60_000,
@@ -413,24 +412,21 @@ export async function DELETE(request: Request) {
       wev.end({ status: 400 });
       return Response.json({ errors: parsed.error.flatten() }, { status: 400 });
     }
-    let row: { _id: string; employer_id: string | null } | null = null;
     try {
-      const shortlists = await col<ShortlistDoc>(Collections.shortlists);
-      row = await shortlists.findOne(
-        { _id: parsed.data.id },
-        { projection: { employer_id: 1 } },
-      );
-    } catch {
-      row = null;
-    }
-    const owned = row?.employer_id === employerId;
-    if (!row || !owned) {
-      wev.end({ status: 404 });
-      return Response.json({ error: "shortlist not found" }, { status: 404 });
-    }
-    try {
-      const shortlists = await col<ShortlistDoc>(Collections.shortlists);
-      await shortlists.deleteMany({ _id: parsed.data.id, employer_id: employerId });
+      const db = await getDb();
+      const deleted = await db
+        .delete(schema.shortlists)
+        .where(
+          and(
+            eq(schema.shortlists.id, parsed.data.id),
+            eq(schema.shortlists.employer_id, employerId),
+          ),
+        )
+        .returning({ id: schema.shortlists.id });
+      if (!deleted[0]) {
+        wev.end({ status: 404 });
+        return Response.json({ error: "shortlist not found" }, { status: 404 });
+      }
     } catch {
       console.error("[shortlists] remove failed");
       wev.add({ degraded: true });
@@ -451,12 +447,18 @@ export async function DELETE(request: Request) {
     );
   }
   try {
-    const shortlists = await col<ShortlistDoc>(Collections.shortlists);
-    await shortlists.deleteMany({
-      employer_id: employerId,
-      candidate_id: parsed.data.candidate_id,
-      job_id: parsed.data.job_id ?? null,
-    });
+    const db = await getDb();
+    await db
+      .delete(schema.shortlists)
+      .where(
+        and(
+          eq(schema.shortlists.employer_id, employerId),
+          eq(schema.shortlists.candidate_id, parsed.data.candidate_id),
+          parsed.data.job_id
+            ? eq(schema.shortlists.job_id, parsed.data.job_id)
+            : isNull(schema.shortlists.job_id),
+        ),
+      );
   } catch {
     console.error("[shortlists] remove failed");
     wev.add({ degraded: true });
@@ -467,3 +469,5 @@ export async function DELETE(request: Request) {
   wev.end({ status: 200 });
   return Response.json({ ok: true });
 }
+
+export type { Db };

@@ -2,6 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import Link from "next/link";
+import TraceFill from "@/components/TraceFill";
 import {
   fmtMoney,
   initials,
@@ -349,7 +350,7 @@ export default function CandidateDetail({ row, onBack }: Props) {
       {score != null ? (
         <div className="mt-4">
           <div className="trace-rule" aria-hidden="true">
-            <div className="trace-fill" style={{ background: "#1F2DE6", width: `${score}%` }} />
+            <TraceFill width={`${score}%`} background="#1F2DE6" />
           </div>
         </div>
       ) : null}

@@ -1,12 +1,11 @@
 import { randomUUID } from "crypto";
-import type { Collection } from "mongodb";
+import { and, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
+import { getDb, schema } from "@/db/client";
 import { readJsonBody } from "@/lib/http";
 import { clientIp, rateLimit, rateLimitResponse } from "@/lib/rate-limit";
-import { hashPassword, passwordPolicyError, verifyPassword } from "@/lib/password";
-import { AppDoc, col, Collections } from "@/lib/mongo";
+import { hashPasswordRemote, passwordPolicyError, verifyPasswordRemote } from "@/lib/password";
 import { createSession, setSessionCookie } from "@/lib/session";
-import { ensureAuthIndexes } from "@/lib/auth-user";
 import { normalizeEmail } from "@/lib/validators";
 
 /**
@@ -25,30 +24,32 @@ const bodySchema = z.object({
   password: z.string().min(1).max(200),
 });
 
-function isDuplicateKey(e: unknown): boolean {
-  return typeof e === "object" && e !== null && (e as { code?: unknown }).code === 11000;
+function isUniqueViolation(e: unknown): boolean {
+  if (typeof e !== "object" || e === null) return false;
+  const msg = String((e as { message?: string }).message ?? "");
+  return /UNIQUE constraint failed/i.test(msg);
 }
+
+type ClaimOutcome = "ok" | "bad-password" | "suspended";
 
 /** Set-or-verify the password on an existing row. */
 async function claimRow(
-  users: Collection<AppDoc>,
-  raw: AppDoc,
+  raw: typeof schema.users.$inferSelect,
   password: string,
-): Promise<"ok" | "bad-password" | "suspended"> {
-  const stored =
-    typeof raw.password_hash === "string" && raw.password_hash ? raw.password_hash : null;
-  if (stored) {
-    if (!(await verifyPassword(password, stored))) return "bad-password";
+): Promise<ClaimOutcome> {
+  if (raw.password_hash) {
+    if (!(await verifyPasswordRemote(password, raw.password_hash))) return "bad-password";
   } else {
-    const password_hash = await hashPassword(password);
-    await users.updateOne({ _id: raw._id }, { $set: { password_hash } });
+    const password_hash = await hashPasswordRemote(password);
+    const db = await getDb();
+    await db.update(schema.users).set({ password_hash }).where(eq(schema.users.id, raw.id));
   }
-  if (typeof raw.status === "string" && raw.status !== "active") return "suspended";
+  if (raw.status !== "active") return "suspended";
   return "ok";
 }
 
 export async function POST(request: Request): Promise<Response> {
-  const ipLimit = rateLimit(request, {
+  const ipLimit = await rateLimit(request, {
     key: "auth-claim",
     limit: 10,
     windowMs: 10 * 60_000,
@@ -69,7 +70,7 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: "Enter a valid email." }, { status: 400 });
   }
 
-  const emailLimit = rateLimit(request, {
+  const emailLimit = await rateLimit(request, {
     key: "auth-claim-email",
     limit: 10,
     windowMs: 10 * 60_000,
@@ -77,58 +78,64 @@ export async function POST(request: Request): Promise<Response> {
   });
   if (!emailLimit.ok) return rateLimitResponse(emailLimit.retryAfterMs);
 
-  await ensureAuthIndexes();
-
-  const users = await col<AppDoc>(Collections.users);
+  const db = await getDb();
   try {
-    let raw = await users.findOne({ email });
+    const existingRows = await db
+      .select()
+      .from(schema.users)
+      .where(eq(schema.users.email, email))
+      .limit(1);
+    let raw = existingRows[0];
     let userId: string;
 
     if (raw) {
-      const outcome = await claimRow(users, raw, parsed.data.password);
+      const outcome = await claimRow(raw, parsed.data.password);
       if (outcome === "bad-password") {
         return Response.json({ error: "Incorrect password." }, { status: 401 });
       }
       if (outcome === "suspended") {
         return Response.json({ error: "Account suspended." }, { status: 403 });
       }
-      userId = raw._id;
+      userId = raw.id;
     } else {
       // First claim for an email the wizard already created a page for.
       userId = randomUUID();
-      const password_hash = await hashPassword(parsed.data.password);
+      const password_hash = await hashPasswordRemote(parsed.data.password);
       try {
-        await users.insertOne({
-          _id: userId,
+        await db.insert(schema.users).values({
+          id: userId,
           email,
           password_hash,
           role: "candidate",
           status: "active",
           email_verified: false,
-          created_at: new Date(),
         });
       } catch (e) {
-        if (!isDuplicateKey(e)) throw e;
+        if (!isUniqueViolation(e)) throw e;
         // Lost a race with a concurrent claim — verify against theirs.
-        raw = await users.findOne({ email });
+        const raced = await db
+          .select()
+          .from(schema.users)
+          .where(eq(schema.users.email, email))
+          .limit(1);
+        raw = raced[0];
         if (!raw) throw e;
-        const outcome = await claimRow(users, raw, parsed.data.password);
+        const outcome = await claimRow(raw, parsed.data.password);
         if (outcome === "bad-password") {
           return Response.json({ error: "Incorrect password." }, { status: 401 });
         }
         if (outcome === "suspended") {
           return Response.json({ error: "Account suspended." }, { status: 403 });
         }
-        userId = raw._id;
+        userId = raw.id;
       }
     }
 
     // Link any orphan candidate row published under this email.
-    const candidates = await col<AppDoc>(Collections.candidates);
-    await candidates.updateMany(
-      { contact_email: email, user_id: null },
-      { $set: { user_id: userId } },
-    );
+    await db
+      .update(schema.candidates)
+      .set({ user_id: userId })
+      .where(and(eq(schema.candidates.contact_email, email), isNull(schema.candidates.user_id)));
 
     const { token, expires } = await createSession(userId, {
       userAgent: request.headers.get("user-agent"),

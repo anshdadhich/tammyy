@@ -62,11 +62,19 @@ export default function AppNav({
   const headerRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    const onScroll = () => headerRef.current?.classList.toggle("is-scrolled", window.scrollY > 4);
+    let lastY = window.scrollY;
+    const onScroll = () => {
+      const y = window.scrollY;
+      headerRef.current?.classList.toggle("is-scrolled", y > 8);
+      headerRef.current?.classList.toggle("is-hidden", y > 140 && y > lastY + 2);
+      if (y < lastY - 2) headerRef.current?.classList.remove("is-hidden");
+      lastY = y;
+    };
     onScroll();
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
+
 
   useEffect(() => {
     if (!menu) return;
@@ -85,6 +93,41 @@ export default function AppNav({
   }, [menu]);
 
   const items = NAV_ITEMS[variant];
+  const linksRef = useRef<HTMLDivElement>(null);
+  const pillReadyRef = useRef(false);
+  useEffect(() => {
+    const container = linksRef.current;
+    const pill = container?.querySelector<HTMLElement>(".site-nav-pill");
+    if (!container || !pill) return;
+    const move = () => {
+      const target = container.querySelector<HTMLElement>(
+        `[data-nav-item="${CSS.escape(active ?? "")}"]`,
+      );
+      if (!target) {
+        pill.style.opacity = "0";
+        pill.style.width = "0px";
+        return;
+      }
+      pill.style.opacity = "1";
+      pill.style.width = `${target.offsetWidth}px`;
+      pill.style.transform = `translateX(${target.offsetLeft}px)`;
+      if (!pillReadyRef.current) {
+        // First placement snaps without a glide-from-zero; every later
+        // move animates via the CSS transition.
+        pill.style.transition = "none";
+        pill.getBoundingClientRect();
+        pill.style.transition = "";
+        pillReadyRef.current = true;
+      }
+    };
+    move();
+    const ro = new ResizeObserver(move);
+    ro.observe(container);
+    // Web fonts change link widths after first paint — re-measure when ready.
+    document.fonts?.ready.then(() => move()).catch(() => {});
+    return () => ro.disconnect();
+  }, [active, items]);
+
   const showLogin = !viewer && variant !== "join";
   const showSearch = viewer !== null && viewer.kind === "hr" && !viewer.isAdmin;
 
@@ -105,13 +148,12 @@ export default function AppNav({
       <Link
         key={it.href}
         href={it.href}
+        data-nav-item={it.href}
         className={`site-nav-link press${isActive ? " is-active" : ""}`}
-        style={{ position: "relative" }}
         aria-current={isActive ? "page" : undefined}
         onClick={closeAll}
       >
-        {isActive && <span className="site-nav-pill" />}
-        <span style={{ position: "relative" }}>{it.label}</span>
+        {it.label}
       </Link>
     );
   });
@@ -137,7 +179,10 @@ export default function AppNav({
           Tammy
         </Link>
         <nav aria-label="Main navigation" className="site-navigation hidden lg:flex">
-          <div className="site-nav-links">{linkItems}</div>
+          <div className="site-nav-links" ref={linksRef}>
+            <span className="site-nav-pill" aria-hidden="true" />
+            {linkItems}
+          </div>
         </nav>
         <div className="site-nav-actions">
           {viewer && (

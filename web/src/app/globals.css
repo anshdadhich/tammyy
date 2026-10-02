@@ -380,7 +380,6 @@ button, input { font: inherit; }
   transition: color 160ms var(--ease-out);
 }
 .site-nav-link.is-active { color: var(--ink); font-weight: 600; }
-.site-nav-pill { position: absolute; inset: 0; border-radius: 999px; background: var(--surface); box-shadow: var(--shadow-sm); }
 
 .site-nav-actions { display: flex; align-items: center; gap: 8px; margin-left: 0; justify-self: end; }
 .site-nav-actions > .site-login { display: none; }
@@ -437,6 +436,7 @@ button, input { font: inherit; }
 .site-nav-burger svg { width: 18px; height: 18px; }
 
 .theme-toggle {
+  position: relative;
   display: grid;
   place-items: center;
   width: 40px;
@@ -449,9 +449,26 @@ button, input { font: inherit; }
   cursor: pointer;
   transition: background-color 160ms var(--ease-out);
 }
-.theme-toggle svg { width: 18px; height: 18px; }
-:root[data-theme="light"] .theme-toggle .theme-icon-sun { display: none; }
-:root[data-theme="dark"] .theme-toggle .theme-icon-moon { display: none; }
+.theme-toggle svg {
+  width: 18px;
+  height: 18px;
+  transition: opacity 240ms var(--ease-out), transform 420ms var(--ease-out);
+}
+.theme-toggle .theme-icon-sun,
+.theme-toggle .theme-icon-moon { position: absolute; }
+:root[data-theme="light"] .theme-toggle .theme-icon-sun {
+  opacity: 0;
+  transform: rotate(-120deg) scale(0.5);
+}
+:root[data-theme="dark"] .theme-toggle .theme-icon-moon {
+  opacity: 0;
+  transform: rotate(120deg) scale(0.5);
+}
+:root[data-theme="light"] .theme-toggle .theme-icon-moon,
+:root[data-theme="dark"] .theme-toggle .theme-icon-sun {
+  opacity: 1;
+  transform: rotate(0deg) scale(1);
+}
 
 @media (hover: hover) and (pointer: fine) {
   .site-nav-link:hover { color: var(--ink); }
@@ -462,10 +479,38 @@ button, input { font: inherit; }
 }
 
 .site-mobile-nav {
+  display: grid;
+  grid-template-rows: 1fr;
   background: var(--nav-bg);
   -webkit-backdrop-filter: blur(16px) saturate(1.4);
   backdrop-filter: blur(16px) saturate(1.4);
   border-bottom: 1px solid var(--line);
+  animation: mobile-nav-in 300ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  overflow: hidden;
+}
+.site-mobile-nav > * {
+  opacity: 0;
+  transform: translateX(-10px);
+  animation: mobile-link-in 250ms var(--ease-out) forwards;
+}
+.site-mobile-nav > .site-mobile-actions {
+  transform: translateY(6px);
+  animation-name: mobile-actions-in;
+}
+.site-mobile-links > :nth-child(1) { animation-delay: 50ms; }
+.site-mobile-links > :nth-child(2) { animation-delay: 100ms; }
+.site-mobile-links > :nth-child(3) { animation-delay: 150ms; }
+.site-mobile-links > :nth-child(4) { animation-delay: 200ms; }
+.site-mobile-nav > .site-mobile-actions { animation-delay: 280ms; }
+@keyframes mobile-nav-in {
+  from { opacity: 0; max-height: 0; }
+  to { opacity: 1; max-height: 420px; }
+}
+@keyframes mobile-link-in {
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes mobile-actions-in {
+  to { opacity: 1; transform: translateY(0); }
 }
 .site-mobile-links { display: grid; gap: 4px; padding: 12px 20px 18px; }
 .site-mobile-link {
@@ -1968,3 +2013,185 @@ details.judge[open] summary > svg:last-child { transform: rotate(180deg); }
 }
 
 .sq-facts .sq-detail-row:last-child { border-bottom: 1px solid var(--line); }
+
+
+/* ---------------------------------------------------------------
+   Dither canvas host: pure-CSS halftone fallback when WebGL is off
+   --------------------------------------------------------------- */
+.dither-host {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+.dither-host.is-fallback {
+  background:
+    radial-gradient(circle at 30% 25%, rgba(255, 255, 255, 0.24), transparent 55%),
+    radial-gradient(circle at 75% 70%, rgba(11, 16, 90, 0.55), transparent 60%),
+    repeating-conic-gradient(from 45deg, var(--brand) 0deg 90deg, #1b28c4 90deg 180deg);
+  background-size: auto, auto, 22px 22px;
+  animation: dither-drift 14s linear infinite;
+}
+.dither-host.is-fallback canvas { display: none; }
+@keyframes dither-drift {
+  from { background-position: 0 0, 0 0, 0 0; }
+  to { background-position: 0 0, 0 0, 22px 22px; }
+}
+
+/* ---------------------------------------------------------------
+   Sliding nav pill: one indicator glides between active links
+   --------------------------------------------------------------- */
+.site-navbar-wrap.is-hidden {
+  transform: translateY(-110%);
+}
+.site-navbar-wrap {
+  transform: translateY(0);
+  transition: transform 450ms cubic-bezier(0.16, 1, 0.3, 1), background-color 240ms var(--ease-out), border-color 240ms var(--ease-out);
+}
+.site-nav-links { position: relative; }
+.site-nav-pill {
+  position: absolute;
+  top: 4px;
+  left: 0;
+  height: 34px;
+  width: 0;
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  transition: transform 320ms var(--ease-out), width 320ms var(--ease-out);
+  pointer-events: none;
+}
+.site-nav-link.is-active { color: var(--ink); font-weight: 600; }
+
+/* ---------------------------------------------------------------
+   Scroll reveals: sections gently rise as they enter the viewport
+   --------------------------------------------------------------- */
+@media (prefers-reduced-motion: no-preference) {
+  .reveal {
+    opacity: 0;
+    transform: translateY(22px);
+    transition: opacity 620ms var(--ease-out), transform 620ms var(--ease-out);
+    transition-delay: var(--d, 0ms);
+  }
+  .reveal.is-in,
+  [data-reveal-section] {
+    opacity: 1;
+    transform: none;
+  }
+  [data-reveal-section] {
+    opacity: 0;
+    transform: translateY(26px);
+    transition: opacity 680ms var(--ease-out), transform 680ms var(--ease-out);
+  }
+  [data-reveal-section].is-in {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---------------------------------------------------------------
+   Theme flip: soft cross-fade instead of a hard cut
+   --------------------------------------------------------------- */
+@keyframes theme-swap {
+  from { opacity: 0.86; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 200;
+    background: var(--paper);
+    opacity: 0;
+    transition: opacity 220ms var(--ease-out);
+  }
+  body.theme-flipping::after { opacity: 0.22; }
+}
+
+/* ---------------------------------------------------------------
+   Hover polish: cards lift, links drift, buttons press
+   --------------------------------------------------------------- */
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  .lift {
+    transition: transform 240ms var(--ease-out), box-shadow 240ms var(--ease-out);
+  }
+  .lift:hover {
+    transform: translateY(-3px);
+    box-shadow: var(--shadow-md);
+  }
+  .arrow-link .arrow-ico {
+    transition: transform 240ms var(--ease-out);
+  }
+  .arrow-link:hover .arrow-ico { transform: translateX(4px); }
+}
+
+/* ---------------------------------------------------------------
+   Mobile tuning: tap targets, hero spacing, safe areas
+   --------------------------------------------------------------- */
+@media (max-width: 640px) {
+  section[id] { scroll-margin-top: 72px; }
+  .site-nav-link { min-height: 40px; }
+  .theme-toggle, .site-nav-burger { width: 44px; height: 44px; }
+  .site-mobile-link { min-height: 48px; font-size: 16px; }
+  .site-mobile-nav { padding-bottom: env(safe-area-inset-bottom); }
+}
+
+/* ---------------------------------------------------------------
+   Mode copy swap + candidate detail enter/exit
+   --------------------------------------------------------------- */
+@media (prefers-reduced-motion: no-preference) {
+  .match-copy {
+    animation: copy-swap-in 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  @keyframes copy-swap-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .detail-swap {
+    animation: detail-swap-in 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  @keyframes detail-swap-in {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .stage-row {
+    animation: stage-row-in 280ms var(--ease-out) both;
+    animation-delay: calc(var(--i, 0) * 60ms);
+  }
+  @keyframes stage-row-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+}
+
+/* ---------------------------------------------------------------
+   Sliding hero mode pill + spinner
+   --------------------------------------------------------------- */
+.match-mode-switcher { position: relative; }
+.match-mode-pill {
+  top: 4px;
+  left: 0;
+  inset: auto;
+  height: 32px;
+  width: 0;
+  transition: transform 320ms var(--ease-out), width 320ms var(--ease-out);
+  pointer-events: none;
+}
+.spin {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 999px;
+  animation: spin 700ms linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .spin { animation-duration: 2s; }
+  .site-navbar-wrap { transition: none; }
+  .site-mobile-nav, .site-mobile-nav > * { animation: none; }
+  .site-mobile-nav > * { opacity: 1; transform: none; }
+  .match-mode-pill { transition: none; }
+}

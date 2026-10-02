@@ -1,7 +1,8 @@
 import { randomUUID } from "crypto";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { inngest } from "@/lib/inngest";
-import { AppDoc, col, Collections } from "@/lib/mongo";
+import { getDb, schema, type Db } from "@/db/client";
+import { cfEnv } from "@/lib/cf";
 import { candidateSchema, normalizeEmail } from "@/lib/validators";
 import { revealedCandidateIds, lockContacts } from "@/lib/contact-prefs";
 import { normalizeSkills } from "@/lib/skills";
@@ -50,21 +51,9 @@ const JSON_LIMITS: Record<string, number> = {
   "candidates-delete": 256 * 1024,
 };
 
-function isMissingColumnErr(err: unknown): boolean {
-  if (!err || typeof err !== "object") return false;
-  const e = err as { message?: string; code?: unknown };
-  if (e.code === "PGRST204") return true;
-  return /could not find the|column .* does not exist/i.test(e.message ?? "");
-}
-
-function isDuplicateKey(e: unknown): boolean {
-  return typeof e === "object" && e !== null && (e as { code?: unknown }).code === 11000;
-}
-
-function stripShowFlags(obj: Record<string, unknown>): Record<string, unknown> {
-  const out = { ...obj };
-  for (const f of SHOW_FLAGS) delete out[f];
-  return out;
+function isUniqueViolation(e: unknown): boolean {
+  if (typeof e !== "object" || e === null) return false;
+  return /UNIQUE constraint failed/i.test(String((e as { message?: string }).message ?? ""));
 }
 
 function nullPublicContact(c: Record<string, unknown>): Record<string, unknown> {
@@ -100,9 +89,8 @@ function honeypotTripped(raw: unknown): boolean {
 }
 
 /**
- * Mongo throws where Supabase returned `{ error }`. The old GET ignored
- * child-read errors (`data` came back null → empty lists), so keep that
- * contract: log, fall back, never fail the response.
+ * Child reads must never fail the response (empty lists on error), matching
+ * the long-standing contract of this endpoint.
  */
 async function safeRead<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
   try {
@@ -117,60 +105,38 @@ async function safeRead<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
 }
 
 /**
- * Postgres ON DELETE CASCADE for candidates(id) — Mongo needs it manual.
  * Children first so a failed cascade leaves the candidate row in place
- * (retryable), then the candidate itself.
+ * (retryable), then the candidate itself. SQLite cascades cover most of
+ * this, but the explicit order keeps behavior independent of PRAGMA state.
  */
-async function cascadeDeleteCandidate(candidateId: string): Promise<void> {
-  const [
-    candidates,
-    profiles,
-    workExperiences,
-    projects,
-    education,
-    candidateSkills,
-    profileChunks,
-    oss,
-    depths,
-    matches,
-    shortlists,
-    contactLog,
-  ] = await Promise.all([
-    col<AppDoc>(Collections.candidates),
-    col<AppDoc>(Collections.candidateProfiles),
-    col<AppDoc>(Collections.workExperiences),
-    col<AppDoc>(Collections.projects),
-    col<AppDoc>(Collections.education),
-    col<AppDoc>(Collections.candidateSkills),
-    col<AppDoc>(Collections.profileChunks),
-    col<AppDoc>(Collections.openSourceContributions),
-    col<AppDoc>(Collections.projectDepthAnalysis),
-    col<AppDoc>(Collections.candidateMatches),
-    col<AppDoc>(Collections.shortlists),
-    col<AppDoc>(Collections.contactLog),
-  ]);
+async function cascadeDeleteCandidate(db: Db, candidateId: string): Promise<void> {
   const projIds = (
-    await projects.find({ candidate_id: candidateId }, { projection: { _id: 1 } }).toArray()
-  ).map((p) => p._id);
+    await db
+      .select({ id: schema.projects.id })
+      .from(schema.projects)
+      .where(eq(schema.projects.candidate_id, candidateId))
+  ).map((p) => p.id);
 
-  await Promise.all([
-    profiles.deleteMany({ candidate_id: candidateId }),
-    workExperiences.deleteMany({ candidate_id: candidateId }),
-    projects.deleteMany({ candidate_id: candidateId }),
-    education.deleteMany({ candidate_id: candidateId }),
-    candidateSkills.deleteMany({ candidate_id: candidateId }),
-    profileChunks.deleteMany({ candidate_id: candidateId }),
-    oss.deleteMany({ candidate_id: candidateId }),
-    matches.deleteMany({ candidate_id: candidateId }),
-    shortlists.deleteMany({ candidate_id: candidateId }),
-    contactLog.deleteMany({ candidate_id: candidateId }),
-    ...(projIds.length ? [depths.deleteMany({ project_id: { $in: projIds } })] : []),
-  ]);
-  await candidates.deleteOne({ _id: candidateId });
+  await db.delete(schema.candidateProfiles).where(eq(schema.candidateProfiles.candidate_id, candidateId));
+  await db.delete(schema.workExperiences).where(eq(schema.workExperiences.candidate_id, candidateId));
+  await db.delete(schema.projects).where(eq(schema.projects.candidate_id, candidateId));
+  await db.delete(schema.education).where(eq(schema.education.candidate_id, candidateId));
+  await db.delete(schema.candidateSkills).where(eq(schema.candidateSkills.candidate_id, candidateId));
+  await db.delete(schema.profileChunks).where(eq(schema.profileChunks.candidate_id, candidateId));
+  await db.delete(schema.openSourceContributions).where(eq(schema.openSourceContributions.candidate_id, candidateId));
+  await db.delete(schema.candidateMatches).where(eq(schema.candidateMatches.candidate_id, candidateId));
+  await db.delete(schema.shortlists).where(eq(schema.shortlists.candidate_id, candidateId));
+  await db.delete(schema.contactLog).where(eq(schema.contactLog.candidate_id, candidateId));
+  if (projIds.length) {
+    await db
+      .delete(schema.projectDepthAnalysis)
+      .where(inArray(schema.projectDepthAnalysis.project_id, projIds));
+  }
+  await db.delete(schema.candidates).where(eq(schema.candidates.id, candidateId));
 }
 
 export async function GET(request: Request) {
-  const rl = rateLimit(request, { key: "candidates-get", limit: 120, windowMs: 60_000 });
+  const rl = await rateLimit(request, { key: "candidates-get", limit: 120, windowMs: 60_000 });
   if (!rl.ok) return rateLimitResponse(rl.retryAfterMs);
   const url = new URL(request.url);
   const id = url.searchParams.get("id") ?? undefined;
@@ -178,19 +144,23 @@ export async function GET(request: Request) {
     return Response.json({ error: "provide ?id=<candidate uuid>" }, { status: 400 });
   }
   const session = await getSessionUser();
-  const viewer = session?.viewer ?? { kind: "anon" };
+  const viewer = session?.viewer ?? { kind: "anon" as const };
   if (!uuid.safeParse(id).success) {
     return Response.json({ error: "id must be a valid UUID" }, { status: 400 });
   }
 
-  const raw = await safeRead(
-    async () => (await col<AppDoc>(Collections.candidates)).findOne({ _id: id }),
-    null,
-  );
+  const db = await getDb();
+  const raw = await safeRead(async () => {
+    const rows = await db
+      .select()
+      .from(schema.candidates)
+      .where(eq(schema.candidates.id, id))
+      .limit(1);
+    return rows[0] ?? null;
+  }, null);
   if (!raw) return Response.json({ error: "candidate not found" }, { status: 404 });
-  const { _id, ...candidateRest } = raw;
-  const candidate: Record<string, unknown> = { ...candidateRest, id: _id };
-  const cid = _id;
+  const candidate: Record<string, unknown> = { ...raw, id: raw.id };
+  const cid = raw.id;
 
   let isOwnerVerified = false;
   if (viewer.kind === "owner" && viewer.id === cid) {
@@ -234,89 +204,89 @@ export async function GET(request: Request) {
     const ownSearches = await safeRead(
       async () =>
         (
-          await (
-            await col<AppDoc>(Collections.searches)
-          ).find({ employer_id: hrEmployerId }, { projection: { _id: 1 } })
+          await db
+            .select({ id: schema.searches.id })
+            .from(schema.searches)
+            .where(eq(schema.searches.employer_id, hrEmployerId as string))
             .limit(2000)
-            .toArray()
-        ),
-      [],
+        ).map((s) => s.id),
+      [] as string[],
     );
-    ownSearchIds = ownSearches.map((s) => s._id);
+    ownSearchIds = ownSearches;
   }
 
   const contactLogQuery = async (): Promise<Record<string, unknown>[]> => {
-    const filter: Record<string, unknown> = { candidate_id: cid };
-    if (!isOwnerVerified && hrEmployerId) filter.employer_id = hrEmployerId;
-    const rows = await (
-      await col<AppDoc>(Collections.contactLog)
-    )
-      .find(filter, {
-        projection: { channel: 1, message: 1, job_id: 1, employer_id: 1, created_at: 1 },
+    const conds = [eq(schema.contactLog.candidate_id, cid)];
+    if (!isOwnerVerified && hrEmployerId) conds.push(eq(schema.contactLog.employer_id, hrEmployerId));
+    const rows = await db
+      .select({
+        id: schema.contactLog.id,
+        channel: schema.contactLog.channel,
+        message: schema.contactLog.message,
+        job_id: schema.contactLog.job_id,
+        employer_id: schema.contactLog.employer_id,
+        created_at: schema.contactLog.created_at,
       })
-      .sort({ created_at: -1 })
-      .limit(50)
-      .toArray();
-    return rows.map((r) => ({
-      id: r._id,
-      channel: r.channel ?? null,
-      message: r.message ?? null,
-      job_id: r.job_id ?? null,
-      employer_id: r.employer_id ?? null,
-      created_at: r.created_at ?? null,
-    }));
+      .from(schema.contactLog)
+      .where(and(...conds))
+      .orderBy(desc(schema.contactLog.created_at))
+      .limit(50);
+    return rows.map((r) => ({ ...r }));
   };
   const matchesQuery = async (): Promise<Record<string, unknown>[]> => {
-    const filter: Record<string, unknown> = { candidate_id: cid };
+    const conds = [eq(schema.candidateMatches.candidate_id, cid)];
     if (!isOwnerVerified && ownSearchIds) {
-      filter.search_id = {
-        $in: ownSearchIds.length
-          ? ownSearchIds
-          : ["00000000-0000-0000-0000-000000000000"],
-      };
+      conds.push(
+        inArray(
+          schema.candidateMatches.search_id,
+          ownSearchIds.length ? ownSearchIds : ["00000000-0000-0000-0000-000000000000"],
+        ),
+      );
     }
-    const rows = await (
-      await col<AppDoc>(Collections.candidateMatches)
-    )
-      .find(filter, { projection: { search_id: 1, job_id: 1, score: 1, status: 1, created_at: 1 } })
-      .sort({ created_at: -1 })
-      .limit(50)
-      .toArray();
-    return rows.map((r) => ({
-      id: r._id,
-      search_id: r.search_id ?? null,
-      job_id: r.job_id ?? null,
-      score: r.score ?? null,
-      status: r.status ?? null,
-      created_at: r.created_at ?? null,
-    }));
+    const rows = await db
+      .select({
+        id: schema.candidateMatches.id,
+        search_id: schema.candidateMatches.search_id,
+        job_id: schema.candidateMatches.job_id,
+        score: schema.candidateMatches.score,
+        status: schema.candidateMatches.status,
+        created_at: schema.candidateMatches.created_at,
+      })
+      .from(schema.candidateMatches)
+      .where(and(...conds))
+      .orderBy(desc(schema.candidateMatches.created_at))
+      .limit(50);
+    return rows.map((r) => ({ ...r }));
   };
   const shortlistsQuery = async (): Promise<Record<string, unknown>[]> => {
-    const filter: Record<string, unknown> = { candidate_id: cid };
-    if (!isOwnerVerified && hrEmployerId) filter.employer_id = hrEmployerId;
-    const rows = await (
-      await col<AppDoc>(Collections.shortlists)
-    )
-      .find(filter, { projection: { job_id: 1, status: 1, notes: 1, created_at: 1 } })
-      .sort({ created_at: -1 })
-      .limit(50)
-      .toArray();
-    return rows.map((r) => ({
-      id: r._id,
-      job_id: r.job_id ?? null,
-      status: r.status ?? null,
-      notes: r.notes ?? null,
-      created_at: r.created_at ?? null,
-    }));
+    const conds = [eq(schema.shortlists.candidate_id, cid)];
+    if (!isOwnerVerified && hrEmployerId) conds.push(eq(schema.shortlists.employer_id, hrEmployerId));
+    const rows = await db
+      .select({
+        id: schema.shortlists.id,
+        job_id: schema.shortlists.job_id,
+        status: schema.shortlists.status,
+        notes: schema.shortlists.notes,
+        created_at: schema.shortlists.created_at,
+      })
+      .from(schema.shortlists)
+      .where(and(...conds))
+      .orderBy(desc(schema.shortlists.created_at))
+      .limit(50);
+    return rows.map((r) => ({ ...r }));
   };
 
   const profileP = safeRead<Record<string, unknown> | null>(async () => {
-    const r = await (
-      await col<AppDoc>(Collections.candidateProfiles)
-    ).findOne(
-      { candidate_id: cid },
-      { projection: { summary_markdown: 1, summary_json: 1, updated_at: 1, _id: 0 } },
-    );
+    const rows = await db
+      .select({
+        summary_markdown: schema.candidateProfiles.summary_markdown,
+        summary_json: schema.candidateProfiles.summary_json,
+        updated_at: schema.candidateProfiles.updated_at,
+      })
+      .from(schema.candidateProfiles)
+      .where(eq(schema.candidateProfiles.candidate_id, cid))
+      .limit(1);
+    const r = rows[0];
     if (!r) return null;
     return {
       summary_markdown: r.summary_markdown ?? null,
@@ -333,164 +303,95 @@ export async function GET(request: Request) {
   const shortlistedP = privilegedLogs
     ? safeRead(shortlistsQuery, [] as Record<string, unknown>[])
     : Promise.resolve([] as Record<string, unknown>[]);
+
   const projectsP = safeRead<Record<string, unknown>[]>(async () => {
-    const rows = await (
-      await col<AppDoc>(Collections.projects)
-    )
-      .find(
-        { candidate_id: cid },
-        {
-          projection: {
-            title: 1,
-            description: 1,
-            problem_statement: 1,
-            tech_stack: 1,
-            role_in_project: 1,
-            project_link: 1,
-            repo_link: 1,
-            deployment_link: 1,
-            impact_summary: 1,
-            project_type: 1,
-          },
-        },
-      )
-      .toArray();
-    return rows.map((r) => ({
-      id: r._id,
-      title: r.title ?? null,
-      description: r.description ?? null,
-      problem_statement: r.problem_statement ?? null,
-      tech_stack: r.tech_stack ?? [],
-      role_in_project: r.role_in_project ?? null,
-      project_link: r.project_link ?? null,
-      repo_link: r.repo_link ?? null,
-      deployment_link: r.deployment_link ?? null,
-      impact_summary: r.impact_summary ?? null,
-      project_type: r.project_type ?? null,
-    }));
+    const rows = await db
+      .select({
+        id: schema.projects.id,
+        title: schema.projects.title,
+        description: schema.projects.description,
+        problem_statement: schema.projects.problem_statement,
+        tech_stack: schema.projects.tech_stack,
+        role_in_project: schema.projects.role_in_project,
+        project_link: schema.projects.project_link,
+        repo_link: schema.projects.repo_link,
+        deployment_link: schema.projects.deployment_link,
+        impact_summary: schema.projects.impact_summary,
+        project_type: schema.projects.project_type,
+      })
+      .from(schema.projects)
+      .where(eq(schema.projects.candidate_id, cid));
+    return rows.map((r) => ({ ...r, tech_stack: r.tech_stack ?? [] }));
   }, []);
   const experiencesP = safeRead<Record<string, unknown>[]>(async () => {
-    const rows = await (
-      await col<AppDoc>(Collections.workExperiences)
-    )
-      .find(
-        { candidate_id: cid },
-        {
-          projection: {
-            company_name: 1,
-            job_title: 1,
-            start_date: 1,
-            end_date: 1,
-            is_current: 1,
-            description: 1,
-            achievements: 1,
-            tech_stack: 1,
-            _id: 0,
-          },
-        },
-      )
-      .toArray();
-    return rows.map((r) => ({
-      company_name: r.company_name ?? null,
-      job_title: r.job_title ?? null,
-      start_date: r.start_date ?? null,
-      end_date: r.end_date ?? null,
-      is_current: r.is_current ?? false,
-      description: r.description ?? null,
-      achievements: r.achievements ?? null,
-      tech_stack: r.tech_stack ?? [],
-    }));
+    const rows = await db
+      .select({
+        company_name: schema.workExperiences.company_name,
+        job_title: schema.workExperiences.job_title,
+        start_date: schema.workExperiences.start_date,
+        end_date: schema.workExperiences.end_date,
+        is_current: schema.workExperiences.is_current,
+        description: schema.workExperiences.description,
+        achievements: schema.workExperiences.achievements,
+        tech_stack: schema.workExperiences.tech_stack,
+      })
+      .from(schema.workExperiences)
+      .where(eq(schema.workExperiences.candidate_id, cid));
+    return rows.map((r) => ({ ...r, is_current: r.is_current ?? false, tech_stack: r.tech_stack ?? [] }));
   }, []);
   const educationP = safeRead<Record<string, unknown>[]>(async () => {
-    const rows = await (
-      await col<AppDoc>(Collections.education)
-    )
-      .find(
-        { candidate_id: cid },
-        {
-          projection: {
-            institution: 1,
-            degree: 1,
-            field_of_study: 1,
-            start_year: 1,
-            end_year: 1,
-            achievements: 1,
-            _id: 0,
-          },
-        },
-      )
-      .toArray();
-    return rows.map((r) => ({
-      institution: r.institution ?? null,
-      degree: r.degree ?? null,
-      field_of_study: r.field_of_study ?? null,
-      start_year: r.start_year ?? null,
-      end_year: r.end_year ?? null,
-      achievements: r.achievements ?? null,
-    }));
+    const rows = await db
+      .select({
+        institution: schema.education.institution,
+        degree: schema.education.degree,
+        field_of_study: schema.education.field_of_study,
+        start_year: schema.education.start_year,
+        end_year: schema.education.end_year,
+        achievements: schema.education.achievements,
+      })
+      .from(schema.education)
+      .where(eq(schema.education.candidate_id, cid));
+    return rows.map((r) => ({ ...r }));
   }, []);
   const skillRowsP = safeRead<Record<string, unknown>[]>(async () => {
-    const linkRows = await (
-      await col<AppDoc>(Collections.candidateSkills)
-    )
-      .find(
-        { candidate_id: cid },
-        {
-          projection: {
-            skill_id: 1,
-            experience_years: 1,
-            proficiency_level: 1,
-            source: 1,
-            _id: 0,
-          },
-        },
-      )
-      .toArray();
-    const skillIds = [
-      ...new Set(linkRows.map((r) => String(r.skill_id ?? "")).filter(Boolean)),
-    ];
+    const linkRows = await db
+      .select({
+        skill_id: schema.candidateSkills.skill_id,
+        experience_years: schema.candidateSkills.experience_years,
+        proficiency_level: schema.candidateSkills.proficiency_level,
+        source: schema.candidateSkills.source,
+      })
+      .from(schema.candidateSkills)
+      .where(eq(schema.candidateSkills.candidate_id, cid));
+    const skillIds = [...new Set(linkRows.map((r) => r.skill_id).filter(Boolean))];
     const skillDocs = skillIds.length
-      ? await (
-          await col<AppDoc>(Collections.skills)
-        )
-          .find({ _id: { $in: skillIds } }, { projection: { name: 1 } })
-          .toArray()
+      ? await db
+          .select({ id: schema.skills.id, name: schema.skills.name })
+          .from(schema.skills)
+          .where(inArray(schema.skills.id, skillIds))
       : [];
-    const nameById = new Map(skillDocs.map((s) => [s._id, String(s.name ?? "")]));
+    const nameById = new Map(skillDocs.map((s) => [s.id, s.name]));
     return linkRows.map((r) => ({
       experience_years: r.experience_years ?? null,
       proficiency_level: r.proficiency_level ?? null,
       source: r.source ?? null,
-      skills: { name: nameById.get(String(r.skill_id)) ?? null },
+      skills: { name: nameById.get(r.skill_id) ?? null },
     }));
   }, []);
   const ossP = safeRead<Record<string, unknown>[]>(async () => {
-    const rows = await (
-      await col<AppDoc>(Collections.openSourceContributions)
-    )
-      .find(
-        { candidate_id: cid },
-        {
-          projection: {
-            repo_name: 1,
-            repo_url: 1,
-            description: 1,
-            pr_links: 1,
-            tech_stack: 1,
-            role: 1,
-          },
-        },
-      )
-      .toArray();
-    return rows.map((r) => ({
-      id: r._id,
-      repo_name: r.repo_name ?? null,
-      repo_url: r.repo_url ?? null,
-      description: r.description ?? null,
-      pr_links: r.pr_links ?? [],
-      tech_stack: r.tech_stack ?? [],
-      role: r.role ?? null,
-    }));
+    const rows = await db
+      .select({
+        id: schema.openSourceContributions.id,
+        repo_name: schema.openSourceContributions.repo_name,
+        repo_url: schema.openSourceContributions.repo_url,
+        description: schema.openSourceContributions.description,
+        pr_links: schema.openSourceContributions.pr_links,
+        tech_stack: schema.openSourceContributions.tech_stack,
+        role: schema.openSourceContributions.role,
+      })
+      .from(schema.openSourceContributions)
+      .where(eq(schema.openSourceContributions.candidate_id, cid));
+    return rows.map((r) => ({ ...r, pr_links: r.pr_links ?? [], tech_stack: r.tech_stack ?? [] }));
   }, []);
 
   const [profile, views, matches, shortlisted, projects, experiences, education, skillRows, oss] =
@@ -512,26 +413,18 @@ export async function GET(request: Request) {
     const depthRows = await safeRead(
       async () =>
         (
-          await col<AppDoc>(Collections.projectDepthAnalysis)
-        )
-          .find(
-            { project_id: { $in: projIds } },
-            {
-              projection: {
-                project_id: 1,
-                complexity_score: 1,
-                technical_complexity: 1,
-                architectural_concepts: 1,
-                autonomy_level: 1,
-                evidence_quality: 1,
-                estimated_seniority_signal: 1,
-                business_impact: 1,
-                project_maturity: 1,
-                _id: 0,
-              },
-            },
-          )
-          .toArray(),
+          await db
+            .select({
+              project_id: schema.projectDepthAnalysis.project_id,
+              complexity_score: schema.projectDepthAnalysis.complexity_score,
+              technical_complexity: schema.projectDepthAnalysis.technical_complexity,
+              architectural_concepts: schema.projectDepthAnalysis.architectural_concepts,
+              autonomy_level: schema.projectDepthAnalysis.autonomy_level,
+              evidence_quality: schema.projectDepthAnalysis.evidence_quality,
+            })
+            .from(schema.projectDepthAnalysis)
+            .where(inArray(schema.projectDepthAnalysis.project_id, projIds))
+        ).map((d) => ({ ...d, architectural_concepts: d.architectural_concepts ?? [] })),
       [] as Record<string, unknown>[],
     );
     for (const d of depthRows) {
@@ -607,27 +500,8 @@ function sameRows(a: unknown[], b: unknown[]): boolean {
   return sa.every((s, i) => s === sb[i]);
 }
 
-async function restoreRows(
-  table: string,
-  candidateId: string,
-  prev: unknown[],
-  label: string,
-): Promise<void> {
-  try {
-    const rows = (prev as Record<string, unknown>[]).map((r) => ({
-      _id: randomUUID(),
-      candidate_id: candidateId,
-      ...r,
-    }));
-    if (!rows.length) return;
-    const c = await col<AppDoc>(table);
-    await c.insertMany(rows);
-  } catch (e) {
-    console.error(`[candidates] ${label} restore failed`, redactPii((e as Error)?.message ?? String(e)).slice(0, 200));
-  }
-}
-
 async function skillIdMap(
+  db: Db,
   names: unknown,
 ): Promise<{ canon: string[]; byName: Map<string, string>; ok: boolean }> {
   const raw = Array.isArray(names) ? names : [];
@@ -639,33 +513,22 @@ async function skillIdMap(
   );
   const byName = new Map<string, string>();
   if (!canon.length) return { canon, byName, ok: true };
-  const skills = await col<AppDoc>(Collections.skills);
   try {
-    // onConflict "name" + ignoreDuplicates → insert-if-absent per name.
-    await skills.bulkWrite(
-      canon.map((name) => ({
-        updateOne: {
-          filter: { name },
-          update: {
-            $setOnInsert: {
-              _id: randomUUID(),
-              name,
-              aliases: [],
-              created_at: new Date(),
-            },
-          },
-          upsert: true,
-        },
-      })),
-    );
+    for (const name of canon) {
+      await db
+        .insert(schema.skills)
+        .values({ id: randomUUID(), name, aliases: [] })
+        .onConflictDoNothing();
+    }
   } catch {
   }
   try {
-    const data = await skills
-      .find({ name: { $in: canon } }, { projection: { _id: 1, name: 1 } })
-      .toArray();
+    const data = await db
+      .select({ id: schema.skills.id, name: schema.skills.name })
+      .from(schema.skills)
+      .where(inArray(schema.skills.name, canon));
     for (const s of data) {
-      byName.set(String(s.name).toLowerCase(), s._id);
+      byName.set(s.name.toLowerCase(), s.id);
     }
   } catch {
     return { canon, byName, ok: false };
@@ -673,8 +536,20 @@ async function skillIdMap(
   return { canon, byName, ok: true };
 }
 
+async function enqueuePipeline(candidateId: string): Promise<void> {
+  try {
+    const env = await cfEnv();
+    await env.PROFILE_PIPELINE.create({
+      id: `${candidateId}-${Date.now()}`,
+      params: { candidateId },
+    });
+  } catch (e) {
+    console.error("[candidates] pipeline enqueue failed", redactPii((e as Error)?.message ?? String(e)).slice(0, 200));
+  }
+}
+
 export async function POST(request: Request) {
-  const rl = rateLimit(request, { key: "candidates-post", limit: 10, windowMs: 10 * 60_000 });
+  const rl = await rateLimit(request, { key: "candidates-post", limit: 10, windowMs: 10 * 60_000 });
   if (!rl.ok) return rateLimitResponse(rl.retryAfterMs);
   const read = await readJsonBody(request, JSON_LIMITS["candidates-post"]);
   if (!read.ok) return read.response;
@@ -695,21 +570,26 @@ export async function POST(request: Request) {
   }
   const c = parsed.data;
   const email = normalizeEmail(c.email);
-  const candidates = await col<AppDoc>(Collections.candidates);
+  const db = await getDb();
 
   try {
-    const windowStart = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const recent = await candidates
-      .find({ contact_email: email, created_at: { $gt: windowStart } }, { projection: { _id: 1, created_at: 1 } })
-      .sort({ created_at: -1 })
-      .limit(5)
-      .toArray();
-    const rows = recent.map((r) => ({ id: r._id, created_at: r.created_at }));
-    if (rows.length >= 3) {
+    const windowStart = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const recent = await db
+      .select({ id: schema.candidates.id, created_at: schema.candidates.created_at })
+      .from(schema.candidates)
+      .where(
+        and(
+          eq(schema.candidates.contact_email, email),
+          sql`${schema.candidates.created_at} > ${windowStart}`,
+        ),
+      )
+      .orderBy(desc(schema.candidates.created_at))
+      .limit(5);
+    if (recent.length >= 3) {
       return Response.json({ error: "Too many submissions for this email. Try again later." }, { status: 429 });
     }
-    const newest = rows[0];
-    if (newest && Date.now() - new Date(newest.created_at as string | Date).getTime() < 10 * 60 * 1000) {
+    const newest = recent[0];
+    if (newest && Date.now() - Date.parse(newest.created_at) < 10 * 60 * 1000) {
       return Response.json(
         { error: "A submission for this email is already pending.", candidateId: newest.id },
         { status: 429 },
@@ -718,36 +598,43 @@ export async function POST(request: Request) {
   } catch {
   }
 
-  let dupe: { _id: string } | null = null;
+  let dupe: { id: string } | undefined;
   try {
-    dupe = await candidates.findOne({ contact_email: email }, { projection: { _id: 1 } });
+    const rows = await db
+      .select({ id: schema.candidates.id })
+      .from(schema.candidates)
+      .where(eq(schema.candidates.contact_email, email))
+      .limit(1);
+    dupe = rows[0];
   } catch {
-    dupe = null;
+    dupe = undefined;
   }
-  if (dupe?._id) {
+  if (dupe?.id) {
     return Response.json(
-      { error: "A profile already exists for this email.", candidateId: dupe._id },
+      { error: "A profile already exists for this email.", candidateId: dupe.id },
       { status: 409 },
     );
   }
 
   let userId: string | null = null;
   let createdUser = false;
-  const users = await col<AppDoc>(Collections.users);
   try {
-    const existing = await users.findOne({ email }, { projection: { _id: 1 } });
-    if (existing) {
-      userId = existing._id;
+    const existing = await db
+      .select({ id: schema.users.id })
+      .from(schema.users)
+      .where(eq(schema.users.email, email))
+      .limit(1);
+    if (existing[0]) {
+      userId = existing[0].id;
     } else {
-      const res = await users.insertOne({
-        _id: randomUUID(),
+      userId = randomUUID();
+      await db.insert(schema.users).values({
+        id: userId,
         email,
         role: "candidate",
         status: "active",
         email_verified: false,
-        created_at: new Date(),
       });
-      userId = res.insertedId;
       createdUser = true;
     }
   } catch (e) {
@@ -757,7 +644,9 @@ export async function POST(request: Request) {
 
   const remoteMap: Record<string, string> = { remote: "remote_only", hybrid: "hybrid", onsite: "onsite" };
   const avail = /immedi/i.test(c.availability ?? "") ? "immediate" : /inactive/i.test(c.availability ?? "") ? "inactive" : "notice";
-  const row: Record<string, unknown> = {
+  const candidateId = randomUUID();
+  const row = {
+    id: candidateId,
     user_id: userId,
     full_name: c.name,
     headline: c.headline || `${c.role} - ${c.domain}`,
@@ -777,13 +666,13 @@ export async function POST(request: Request) {
     notice_period: (c.notice_period ?? "").trim().slice(0, 200) || null,
     visibility_status: "hidden",
     consent_status: "pending",
-    ...(c.show_email !== undefined ? { show_email: c.show_email } : {}),
-    ...(c.show_phone !== undefined ? { show_phone: c.show_phone } : {}),
-    ...(c.show_linkedin !== undefined ? { show_linkedin: c.show_linkedin } : {}),
-    ...(c.show_github !== undefined ? { show_github: c.show_github } : {}),
-    ...(c.show_resume !== undefined ? { show_resume: c.show_resume } : {}),
-    ...(c.show_portfolio !== undefined ? { show_portfolio: c.show_portfolio } : {}),
-    ...(c.show_photo !== undefined ? { show_photo: c.show_photo } : {}),
+    show_email: c.show_email === true,
+    show_phone: c.show_phone === true,
+    show_linkedin: c.show_linkedin === true,
+    show_github: c.show_github === true,
+    show_resume: c.show_resume === true,
+    show_portfolio: c.show_portfolio === true,
+    show_photo: c.show_photo === true,
     contact_email: email,
     contact_phone: c.phone || null,
     github_url: c.links?.github || null,
@@ -792,26 +681,18 @@ export async function POST(request: Request) {
     resume_url: c.links?.resume_url || null,
     photo_url: c.photo_url || null,
     profile_strength: null,
-    freshness_updated_at: new Date(),
-    created_at: new Date(),
-    updated_at: new Date(),
   };
-  const candidateId = randomUUID();
   try {
-    await candidates.insertOne({ _id: candidateId, ...row });
+    await db.insert(schema.candidates).values(row);
   } catch (e) {
-    if (isMissingColumnErr(e)) {
-      // Parity with the old schema-drift fallback (Mongo stores any field).
+    console.error("[candidates] create failed", redactPii((e as Error)?.message ?? String(e)).slice(0, 200));
+    if (createdUser && userId) {
       try {
-        await candidates.insertOne({ _id: candidateId, ...stripShowFlags(row) });
+        await db.delete(schema.users).where(eq(schema.users.id, userId));
       } catch {
-        console.error("[candidates] create failed");
-        return Response.json({ error: "candidate create failed" }, { status: 500 });
       }
-    } else {
-      console.error("[candidates] create failed");
-      return Response.json({ error: "candidate create failed" }, { status: 500 });
     }
+    return Response.json({ error: "candidate create failed" }, { status: 500 });
   }
 
   const warnings: string[] = [];
@@ -822,12 +703,12 @@ export async function POST(request: Request) {
     ["personal", "academic", "freelance", "production", "open_source", "prototype"].includes(t)
       ? t
       : null;
+
   try {
     if (c.experiences?.length) {
-      const workExperiences = await col<AppDoc>(Collections.workExperiences);
-      await workExperiences.insertMany(
+      await db.insert(schema.workExperiences).values(
         c.experiences.map((x) => ({
-          _id: randomUUID(),
+          id: randomUUID(),
           candidate_id: candidateId,
           company_name: x.company,
           job_title: x.title,
@@ -839,7 +720,6 @@ export async function POST(request: Request) {
           achievements: x.achievements || null,
           tech_stack: cleanTech(x.tech),
           evidence_links: [],
-          created_at: new Date(),
         })),
       );
     }
@@ -849,10 +729,9 @@ export async function POST(request: Request) {
   }
   try {
     if (c.projects?.length) {
-      const projectsCol = await col<AppDoc>(Collections.projects);
-      await projectsCol.insertMany(
+      await db.insert(schema.projects).values(
         c.projects.map((p) => ({
-          _id: randomUUID(),
+          id: randomUUID(),
           candidate_id: candidateId,
           title: p.title,
           description: p.description,
@@ -864,9 +743,6 @@ export async function POST(request: Request) {
           deployment_link: p.links?.demo || p.links?.live || null,
           impact_summary: [p.impact, p.users_scale, p.hardest_challenge, p.personal_contribution].filter(Boolean).join("\n\n") || null,
           project_type: cleanProjType(p.project_type),
-          start_date: null,
-          end_date: null,
-          created_at: new Date(),
         })),
       );
     }
@@ -876,11 +752,10 @@ export async function POST(request: Request) {
   }
   try {
     if (c.oss?.length) {
-      const ossCol = await col<AppDoc>(Collections.openSourceContributions);
       const ossRows = c.oss
         .filter((o) => o.repo_name?.trim())
         .map((o) => ({
-          _id: randomUUID(),
+          id: randomUUID(),
           candidate_id: candidateId,
           repo_name: o.repo_name.trim(),
           repo_url: o.repo_url || null,
@@ -888,9 +763,8 @@ export async function POST(request: Request) {
           pr_links: (o.pr_links ?? []).filter((u) => u && u.trim()),
           tech_stack: cleanTech(o.tech),
           role: o.role || "Contributor",
-          created_at: new Date(),
         }));
-      if (ossRows.length) await ossCol.insertMany(ossRows);
+      if (ossRows.length) await db.insert(schema.openSourceContributions).values(ossRows);
     }
   } catch (e) {
     console.error("[candidates] oss insert threw", redactPii((e as Error).message));
@@ -901,7 +775,7 @@ export async function POST(request: Request) {
       const rows = c.education.filter((e) => e.institution).map((e) => {
         const yrs = (e.years || "").match(/\d{4}/g) ?? [];
         return {
-          _id: randomUUID(),
+          id: randomUUID(),
           candidate_id: candidateId,
           institution: e.institution,
           degree: e.degree || null,
@@ -911,10 +785,7 @@ export async function POST(request: Request) {
           achievements: e.achievements || null,
         };
       });
-      if (rows.length) {
-        const educationCol = await col<AppDoc>(Collections.education);
-        await educationCol.insertMany(rows);
-      }
+      if (rows.length) await db.insert(schema.education).values(rows);
     }
   } catch (e) {
     console.error("[candidates] education insert threw", redactPii((e as Error).message));
@@ -922,22 +793,16 @@ export async function POST(request: Request) {
   }
   try {
     if (c.skills?.length) {
-      const { canon, byName } = await skillIdMap(c.skills);
+      const { canon, byName } = await skillIdMap(db, c.skills);
       const links = canon.flatMap((name) => {
         const id = byName.get(name.toLowerCase());
         return id ? [{ candidate_id: candidateId, skill_id: id, source: "self_reported" }] : [];
       });
       if (links.length) {
-        const candidateSkills = await col<AppDoc>(Collections.candidateSkills);
-        await candidateSkills.bulkWrite(
-          links.map((l) => ({
-            updateOne: {
-              filter: { candidate_id: l.candidate_id, skill_id: l.skill_id },
-              update: { $set: { candidate_id: l.candidate_id, skill_id: l.skill_id, source: l.source } },
-              upsert: true,
-            },
-          })),
-        );
+        await db
+          .insert(schema.candidateSkills)
+          .values(links)
+          .onConflictDoNothing();
       } else if (c.skills?.length) {
         warnings.push("skills: some skill names were skipped");
       }
@@ -950,10 +815,10 @@ export async function POST(request: Request) {
   if (warnings.some((w) => /\(code [A-Z_]+\)/.test(w))) {
     try {
       if (candidateId) {
-        await cascadeDeleteCandidate(candidateId);
+        await cascadeDeleteCandidate(db, candidateId);
       }
       if (createdUser && userId) {
-        await users.deleteOne({ _id: userId });
+        await db.delete(schema.users).where(eq(schema.users.id, userId));
       }
     } catch {
       console.error("[candidates] rollback failed — manual cleanup needed", redactPii(candidateId ?? ""));
@@ -962,17 +827,13 @@ export async function POST(request: Request) {
     return Response.json({ error: "Could not save the profile. Fix the highlighted fields and retry." }, { status: 500 });
   }
 
-  try {
-    await inngest.send({ name: "candidate.profile.submitted", data: { candidateId } });
-  } catch (e) {
-    console.error("[candidates] pipeline enqueue failed", redactPii((e as Error)?.message ?? String(e)).slice(0, 200));
-  }
+  await enqueuePipeline(candidateId);
 
   return Response.json({ candidateId, status: "processing", warnings }, { status: 202 });
 }
 
 export async function PATCH(request: Request) {
-  const rl = rateLimit(request, { key: "candidates-patch", limit: 30, windowMs: 60_000 });
+  const rl = await rateLimit(request, { key: "candidates-patch", limit: 30, windowMs: 60_000 });
   if (!rl.ok) return rateLimitResponse(rl.retryAfterMs);
   const read = await readJsonBody(request, JSON_LIMITS["candidates-patch"]);
   if (!read.ok) return read.response;
@@ -992,28 +853,207 @@ export async function PATCH(request: Request) {
     return Response.json({ error: "Something went wrong. Try again." }, { status: 500 });
   }
   try {
-    const candidates = db.collection<AppDoc>(Collections.candidates);
-    const res = await candidates.updateOne(
-      { _id: parsed.data.id },
-      { $set: { visibility_status: parsed.data.visibility_status, updated_at: new Date() } },
-    );
-    if (!res.matchedCount) {
-      return Response.json({ error: "candidate not found" }, { status: 404 });
-    }
-    const row = await candidates.findOne(
-      { _id: parsed.data.id },
-      { projection: { visibility_status: 1, _id: 1 } },
-    );
+    const updated = await db
+      .update(schema.candidates)
+      .set({
+        visibility_status: parsed.data.visibility_status,
+        updated_at: new Date().toISOString(),
+      })
+      .where(eq(schema.candidates.id, parsed.data.id))
+      .returning({ id: schema.candidates.id, visibility_status: schema.candidates.visibility_status });
+    const row = updated[0];
     if (!row) return Response.json({ error: "candidate not found" }, { status: 404 });
-    return Response.json({ candidate: { id: row._id, visibility_status: row.visibility_status } });
+    return Response.json({ candidate: { id: row.id, visibility_status: row.visibility_status } });
   } catch {
-    // Old code surfaced update/read errors as a null maybeSingle → 404.
     return Response.json({ error: "candidate not found" }, { status: 404 });
   }
 }
 
+type ChildTable = "work_experiences" | "projects" | "open_source_contributions" | "education";
+
+async function replaceChildren(
+  db: Db,
+  table: ChildTable,
+  candidateId: string,
+  next: Record<string, unknown>[],
+  prev: Record<string, unknown>[],
+  label: string,
+  warnings: string[],
+): Promise<boolean> {
+  if (sameRows(next, prev)) return false;
+  try {
+    switch (table) {
+      case "work_experiences":
+        await db.delete(schema.workExperiences).where(eq(schema.workExperiences.candidate_id, candidateId));
+        if (next.length) {
+          await db.insert(schema.workExperiences).values(
+            next.map((r) => ({
+              id: randomUUID(),
+              candidate_id: candidateId,
+              company_name: String(r.company_name ?? ""),
+              job_title: String(r.job_title ?? ""),
+              employment_type: (r.employment_type as string | null) ?? null,
+              start_date: (r.start_date as string | null) ?? null,
+              end_date: (r.end_date as string | null) ?? null,
+              is_current: r.is_current === true,
+              description: (r.description as string | null) ?? null,
+              achievements: (r.achievements as string | null) ?? null,
+              tech_stack: (r.tech_stack as string[]) ?? [],
+              evidence_links: [],
+            })),
+          );
+        }
+        break;
+      case "projects":
+        await db.delete(schema.projects).where(eq(schema.projects.candidate_id, candidateId));
+        if (next.length) {
+          await db.insert(schema.projects).values(
+            next.map((r) => ({
+              id: randomUUID(),
+              candidate_id: candidateId,
+              title: String(r.title ?? ""),
+              description: String(r.description ?? ""),
+              problem_statement: (r.problem_statement as string | null) ?? null,
+              tech_stack: (r.tech_stack as string[]) ?? [],
+              role_in_project: (r.role_in_project as string | null) ?? null,
+              project_link: (r.project_link as string | null) ?? null,
+              repo_link: (r.repo_link as string | null) ?? null,
+              deployment_link: (r.deployment_link as string | null) ?? null,
+              impact_summary: (r.impact_summary as string | null) ?? null,
+              project_type: (r.project_type as string | null) ?? null,
+            })),
+          );
+        }
+        break;
+      case "open_source_contributions":
+        await db
+          .delete(schema.openSourceContributions)
+          .where(eq(schema.openSourceContributions.candidate_id, candidateId));
+        if (next.length) {
+          await db.insert(schema.openSourceContributions).values(
+            next.map((r) => ({
+              id: randomUUID(),
+              candidate_id: candidateId,
+              repo_name: String(r.repo_name ?? ""),
+              repo_url: (r.repo_url as string | null) ?? null,
+              description: (r.description as string | null) ?? null,
+              pr_links: (r.pr_links as string[]) ?? [],
+              tech_stack: (r.tech_stack as string[]) ?? [],
+              role: (r.role as string | null) ?? null,
+            })),
+          );
+        }
+        break;
+      case "education":
+        await db.delete(schema.education).where(eq(schema.education.candidate_id, candidateId));
+        if (next.length) {
+          await db.insert(schema.education).values(
+            next.map((r) => ({
+              id: randomUUID(),
+              candidate_id: candidateId,
+              institution: String(r.institution ?? ""),
+              degree: (r.degree as string | null) ?? null,
+              field_of_study: (r.field_of_study as string | null) ?? null,
+              start_year: (r.start_year as number | null) ?? null,
+              end_year: (r.end_year as number | null) ?? null,
+              achievements: (r.achievements as string | null) ?? null,
+            })),
+          );
+        }
+        break;
+    }
+    return true;
+  } catch (e) {
+    console.error(`[candidates] ${label} replace failed`, redactPii((e as Error).message));
+    warnings.push(`${label}: could not save`);
+    // Best-effort restore of the previous rows.
+    try {
+      await replaceChildrenRestore(db, table, candidateId, prev);
+    } catch (e2) {
+      console.error(`[candidates] ${label} restore failed`, redactPii((e2 as Error).message));
+    }
+    return true;
+  }
+}
+
+async function replaceChildrenRestore(
+  db: Db,
+  table: ChildTable,
+  candidateId: string,
+  prev: Record<string, unknown>[],
+): Promise<void> {
+  if (!prev.length) return;
+  const withIds = prev.map((r) => ({ ...r, id: randomUUID(), candidate_id: candidateId })) as (Record<string, unknown> & { id: string; candidate_id: string })[];
+  switch (table) {
+    case "work_experiences":
+      await db.insert(schema.workExperiences).values(
+        withIds.map((r) => ({
+          id: r.id,
+          candidate_id: candidateId,
+          company_name: String(r.company_name ?? ""),
+          job_title: String(r.job_title ?? ""),
+          employment_type: (r.employment_type as string | null) ?? null,
+          start_date: (r.start_date as string | null) ?? null,
+          end_date: (r.end_date as string | null) ?? null,
+          is_current: r.is_current === true,
+          description: (r.description as string | null) ?? null,
+          achievements: (r.achievements as string | null) ?? null,
+          tech_stack: (r.tech_stack as string[]) ?? [],
+          evidence_links: [],
+        })),
+      );
+      break;
+    case "projects":
+      await db.insert(schema.projects).values(
+        withIds.map((r) => ({
+          id: r.id,
+          candidate_id: candidateId,
+          title: String(r.title ?? ""),
+          description: String(r.description ?? ""),
+          problem_statement: (r.problem_statement as string | null) ?? null,
+          tech_stack: (r.tech_stack as string[]) ?? [],
+          role_in_project: (r.role_in_project as string | null) ?? null,
+          project_link: (r.project_link as string | null) ?? null,
+          repo_link: (r.repo_link as string | null) ?? null,
+          deployment_link: (r.deployment_link as string | null) ?? null,
+          impact_summary: (r.impact_summary as string | null) ?? null,
+          project_type: (r.project_type as string | null) ?? null,
+        })),
+      );
+      break;
+    case "open_source_contributions":
+      await db.insert(schema.openSourceContributions).values(
+        withIds.map((r) => ({
+          id: r.id,
+          candidate_id: candidateId,
+          repo_name: String(r.repo_name ?? ""),
+          repo_url: (r.repo_url as string | null) ?? null,
+          description: (r.description as string | null) ?? null,
+          pr_links: (r.pr_links as string[]) ?? [],
+          tech_stack: (r.tech_stack as string[]) ?? [],
+          role: (r.role as string | null) ?? null,
+        })),
+      );
+      break;
+    case "education":
+      await db.insert(schema.education).values(
+        withIds.map((r) => ({
+          id: r.id,
+          candidate_id: candidateId,
+          institution: String(r.institution ?? ""),
+          degree: (r.degree as string | null) ?? null,
+          field_of_study: (r.field_of_study as string | null) ?? null,
+          start_year: (r.start_year as number | null) ?? null,
+          end_year: (r.end_year as number | null) ?? null,
+          achievements: (r.achievements as string | null) ?? null,
+        })),
+      );
+      break;
+  }
+}
+
 export async function PUT(request: Request) {
-  const rl = rateLimit(request, { key: "candidates-put", limit: 20, windowMs: 60_000 });
+  const rl = await rateLimit(request, { key: "candidates-put", limit: 20, windowMs: 60_000 });
   if (!rl.ok) return rateLimitResponse(rl.retryAfterMs);
   const read = await readJsonBody(request, JSON_LIMITS["candidates-put"]);
   if (!read.ok) return read.response;
@@ -1034,18 +1074,23 @@ export async function PUT(request: Request) {
   if (!parsed.success) {
     return Response.json({ errors: parsed.error.flatten() }, { status: 400 });
   }
-  const candidates = await col<AppDoc>(Collections.candidates);
-  let existing: { _id: string; user_id: string; contact_email: string } | null = null;
+  const db = await getDb();
+  let prev: { id: string; user_id: string | null; contact_email: string | null } | undefined;
   try {
-    existing = (await candidates.findOne(
-      { _id: id },
-      { projection: { user_id: 1, contact_email: 1 } },
-    )) as { _id: string; user_id: string; contact_email: string } | null;
+    const rows = await db
+      .select({
+        id: schema.candidates.id,
+        user_id: schema.candidates.user_id,
+        contact_email: schema.candidates.contact_email,
+      })
+      .from(schema.candidates)
+      .where(eq(schema.candidates.id, id))
+      .limit(1);
+    prev = rows[0];
   } catch {
-    existing = null;
+    prev = undefined;
   }
-  if (!existing) return Response.json({ error: "candidate not found" }, { status: 404 });
-  const prev = existing;
+  if (!prev) return Response.json({ error: "candidate not found" }, { status: 404 });
   const c = parsed.data;
   const present = new Set(Object.keys(rest));
 
@@ -1086,15 +1131,7 @@ export async function PUT(request: Request) {
     patch.notice_period = (c.notice_period ?? "").trim().slice(0, 200) || null;
   }
   if (present.has("visibility")) patch.visibility_status = c.visibility ?? "visible";
-  for (const flag of [
-    "show_email",
-    "show_phone",
-    "show_linkedin",
-    "show_github",
-    "show_resume",
-    "show_portfolio",
-    "show_photo",
-  ] as const) {
+  for (const flag of SHOW_FLAGS) {
     if (present.has(flag)) patch[flag] = c[flag] === true;
   }
   if (present.has("phone")) patch.contact_phone = c.phone || null;
@@ -1124,26 +1161,36 @@ export async function PUT(request: Request) {
           { status: 403 },
         );
       }
-      const users = await col<AppDoc>(Collections.users);
-      let clash: { _id: string } | null = null;
+      let clash: { id: string } | undefined;
       try {
-        clash = await users.findOne({ email }, { projection: { _id: 1 } });
+        const rows = await db
+          .select({ id: schema.users.id })
+          .from(schema.users)
+          .where(eq(schema.users.email, email))
+          .limit(1);
+        clash = rows[0];
       } catch {
-        clash = null;
+        clash = undefined;
       }
-      if (clash?._id) {
+      if (clash?.id) {
         return Response.json(
           { error: "That email is already in use. Verify ownership first." },
           { status: 409 },
         );
       }
-      // Mongo `users` is the single identity row (no separate auth store):
-      // updating email here is the whole change — OTPs and logins read it.
+      // `users` is the single identity row: updating email here is the
+      // whole change — OTPs and logins read it.
+      if (!prev.user_id) {
+        return Response.json({ error: "Could not change email. Try again." }, { status: 500 });
+      }
       try {
-        await users.updateOne({ _id: prev.user_id }, { $set: { email } });
+        await db
+          .update(schema.users)
+          .set({ email })
+          .where(eq(schema.users.id, prev.user_id));
       } catch (e) {
         const msg = (e as Error)?.message ?? "";
-        if (isDuplicateKey(e) || /already|exists|taken|duplicate/i.test(msg)) {
+        if (isUniqueViolation(e) || /already|exists|taken|duplicate/i.test(msg)) {
           return Response.json(
             { error: "That email is already in use. Verify ownership first." },
             { status: 409 },
@@ -1158,20 +1205,13 @@ export async function PUT(request: Request) {
 
   if (Object.keys(patch).length > 0) {
     try {
-      await candidates.updateOne({ _id: id }, { $set: { ...patch, updated_at: new Date() } });
+      await db
+        .update(schema.candidates)
+        .set({ ...(patch as Record<string, never>), updated_at: new Date().toISOString() })
+        .where(eq(schema.candidates.id, id));
     } catch (e) {
-      if (isMissingColumnErr(e)) {
-        // Parity with the old schema-drift fallback (Mongo stores any field).
-        try {
-          await candidates.updateOne({ _id: id }, { $set: { ...stripShowFlags(patch), updated_at: new Date() } });
-        } catch {
-          console.error("[candidates] update failed", redactPii(id));
-          return Response.json({ error: "candidate update failed" }, { status: 500 });
-        }
-      } else {
-        console.error("[candidates] update failed", redactPii(id));
-        return Response.json({ error: "candidate update failed" }, { status: 500 });
-      }
+      console.error("[candidates] update failed", redactPii(id), redactPii((e as Error).message));
+      return Response.json({ error: "candidate update failed" }, { status: 500 });
     }
   }
 
@@ -1184,222 +1224,186 @@ export async function PUT(request: Request) {
     ["personal", "academic", "freelance", "production", "open_source", "prototype"].includes(t)
       ? t
       : null;
-  if (present.has("experiences")) {
+
+  const readPrev = async <T>(fn: () => Promise<T[]>, fallback: T[]): Promise<T[]> => {
     try {
-      const nextExp = (c.experiences ?? []).map((x) => ({
-        company_name: x.company,
-        job_title: x.title,
-        start_date: toDateInput(x.start_date),
-        end_date: toDateInput(x.end_date),
-        is_current: x.current ?? false,
-        description: x.description || null,
-        achievements: x.achievements || null,
-        tech_stack: cleanTech(x.tech),
-      }));
-      const workExperiences = await col<AppDoc>(Collections.workExperiences);
-      const expRows = await workExperiences
-        .find(
-          { candidate_id: id },
-          {
-            projection: {
-              company_name: 1,
-              job_title: 1,
-              start_date: 1,
-              end_date: 1,
-              is_current: 1,
-              description: 1,
-              achievements: 1,
-              tech_stack: 1,
-              _id: 0,
-            },
-          },
-        )
-        .toArray();
-      if (!sameRows(nextExp, expRows as unknown[])) {
-        materialChanged = true;
-        await workExperiences.deleteMany({ candidate_id: id });
-        if (nextExp.length) {
-          try {
-            await workExperiences.insertMany(nextExp.map((r) => ({ _id: randomUUID(), candidate_id: id, ...r })));
-          } catch (e) {
-            console.error("[candidates] experience replace failed", redactPii((e as Error).message));
-            putWarnings.push("experience: could not save (code EXP_SAVE)");
-            await restoreRows(Collections.workExperiences, id, expRows as unknown[], "experience");
-          }
-        }
-      }
-    } catch (e) {
-      console.error("[candidates] experience replace threw", redactPii((e as Error).message));
-      putWarnings.push("experience: could not save (code EXP_SAVE)");
+      return await fn();
+    } catch {
+      return fallback;
     }
+  };
+
+  if (present.has("experiences")) {
+    const nextExp = (c.experiences ?? []).map((x) => ({
+      company_name: x.company,
+      job_title: x.title,
+      start_date: toDateInput(x.start_date),
+      end_date: toDateInput(x.end_date),
+      is_current: x.current ?? false,
+      description: x.description || null,
+      achievements: x.achievements || null,
+      tech_stack: cleanTech(x.tech),
+    }));
+    const expRows = await readPrev(async () => {
+      const rows = await db
+        .select({
+          company_name: schema.workExperiences.company_name,
+          job_title: schema.workExperiences.job_title,
+          start_date: schema.workExperiences.start_date,
+          end_date: schema.workExperiences.end_date,
+          is_current: schema.workExperiences.is_current,
+          description: schema.workExperiences.description,
+          achievements: schema.workExperiences.achievements,
+          tech_stack: schema.workExperiences.tech_stack,
+        })
+        .from(schema.workExperiences)
+        .where(eq(schema.workExperiences.candidate_id, id));
+      return rows.map((r) => ({ ...r, is_current: r.is_current ?? false, tech_stack: r.tech_stack ?? [] }));
+    }, []);
+    const changed = await replaceChildren(
+      db,
+      "work_experiences",
+      id,
+      nextExp,
+      expRows as Record<string, unknown>[],
+      "experience",
+      putWarnings,
+    );
+    if (changed && !sameRows(nextExp, expRows as unknown[])) materialChanged = true;
   }
   if (present.has("projects")) {
-    try {
-      const nextProj = (c.projects ?? []).map((p) => ({
-        title: p.title,
-        description: p.description,
-        problem_statement: p.problem || null,
-        tech_stack: cleanTech(p.tech),
-        role_in_project: p.role || null,
-        project_link: p.links?.live || null,
-        repo_link: p.links?.repo || null,
-        deployment_link: p.links?.demo || p.links?.live || null,
-        impact_summary: [p.impact, p.users_scale, p.hardest_challenge, p.personal_contribution].filter(Boolean).join("\n\n") || null,
-        project_type: cleanProjType(p.project_type),
-      }));
-      const projectsCol = await col<AppDoc>(Collections.projects);
-      const projRows = await projectsCol
-        .find(
-          { candidate_id: id },
-          {
-            projection: {
-              title: 1,
-              description: 1,
-              problem_statement: 1,
-              tech_stack: 1,
-              role_in_project: 1,
-              project_link: 1,
-              repo_link: 1,
-              deployment_link: 1,
-              impact_summary: 1,
-              project_type: 1,
-              _id: 0,
-            },
-          },
-        )
-        .toArray();
-      if (!sameRows(nextProj, projRows as unknown[])) {
-        materialChanged = true;
-        await projectsCol.deleteMany({ candidate_id: id });
-        if (nextProj.length) {
-          try {
-            await projectsCol.insertMany(nextProj.map((r) => ({ _id: randomUUID(), candidate_id: id, ...r })));
-          } catch (e) {
-            console.error("[candidates] projects replace failed", redactPii((e as Error).message));
-            putWarnings.push("projects: could not save (code PRJ_SAVE)");
-            await restoreRows(Collections.projects, id, projRows as unknown[], "projects");
-          }
-        }
-      }
-    } catch (e) {
-      console.error("[candidates] projects replace threw", redactPii((e as Error).message));
-      putWarnings.push("projects: could not save (code PRJ_SAVE)");
-    }
+    const nextProj = (c.projects ?? []).map((p) => ({
+      title: p.title,
+      description: p.description,
+      problem_statement: p.problem || null,
+      tech_stack: cleanTech(p.tech),
+      role_in_project: p.role || null,
+      project_link: p.links?.live || null,
+      repo_link: p.links?.repo || null,
+      deployment_link: p.links?.demo || p.links?.live || null,
+      impact_summary: [p.impact, p.users_scale, p.hardest_challenge, p.personal_contribution].filter(Boolean).join("\n\n") || null,
+      project_type: cleanProjType(p.project_type),
+    }));
+    const projRows = await readPrev(async () => {
+      const rows = await db
+        .select({
+          title: schema.projects.title,
+          description: schema.projects.description,
+          problem_statement: schema.projects.problem_statement,
+          tech_stack: schema.projects.tech_stack,
+          role_in_project: schema.projects.role_in_project,
+          project_link: schema.projects.project_link,
+          repo_link: schema.projects.repo_link,
+          deployment_link: schema.projects.deployment_link,
+          impact_summary: schema.projects.impact_summary,
+          project_type: schema.projects.project_type,
+        })
+        .from(schema.projects)
+        .where(eq(schema.projects.candidate_id, id));
+      return rows.map((r) => ({ ...r, tech_stack: r.tech_stack ?? [] }));
+    }, []);
+    const changed = await replaceChildren(
+      db,
+      "projects",
+      id,
+      nextProj,
+      projRows as Record<string, unknown>[],
+      "projects",
+      putWarnings,
+    );
+    if (changed && !sameRows(nextProj, projRows as unknown[])) materialChanged = true;
   }
   if (present.has("oss")) {
-    try {
-      const nextOss = (c.oss ?? [])
-        .filter((o) => o.repo_name?.trim())
-        .map((o) => ({
-          repo_name: o.repo_name.trim(),
-          repo_url: o.repo_url || null,
-          description: o.description || null,
-          pr_links: (o.pr_links ?? []).filter((u) => u && u.trim()),
-          tech_stack: cleanTech(o.tech),
-          role: o.role || "Contributor",
-        }));
-      const ossCol = await col<AppDoc>(Collections.openSourceContributions);
-      const ossRows = await ossCol
-        .find(
-          { candidate_id: id },
-          {
-            projection: {
-              repo_name: 1,
-              repo_url: 1,
-              description: 1,
-              pr_links: 1,
-              tech_stack: 1,
-              role: 1,
-              _id: 0,
-            },
-          },
-        )
-        .toArray();
-      if (!sameRows(nextOss, ossRows as unknown[])) {
-        materialChanged = true;
-        await ossCol.deleteMany({ candidate_id: id });
-        if (nextOss.length) {
-          try {
-            await ossCol.insertMany(nextOss.map((r) => ({ _id: randomUUID(), candidate_id: id, ...r })));
-          } catch (e) {
-            console.error("[candidates] oss replace failed", redactPii((e as Error).message));
-            putWarnings.push("open source: could not save (code OSS_SAVE)");
-            await restoreRows(Collections.openSourceContributions, id, ossRows as unknown[], "oss");
-          }
-        }
-      }
-    } catch (e) {
-      console.error("[candidates] oss replace threw", redactPii((e as Error).message));
-      putWarnings.push("open source: could not save (code OSS_SAVE)");
-    }
+    const nextOss = (c.oss ?? [])
+      .filter((o) => o.repo_name?.trim())
+      .map((o) => ({
+        repo_name: o.repo_name.trim(),
+        repo_url: o.repo_url || null,
+        description: o.description || null,
+        pr_links: (o.pr_links ?? []).filter((u) => u && u.trim()),
+        tech_stack: cleanTech(o.tech),
+        role: o.role || "Contributor",
+      }));
+    const ossRows = await readPrev(async () => {
+      const rows = await db
+        .select({
+          repo_name: schema.openSourceContributions.repo_name,
+          repo_url: schema.openSourceContributions.repo_url,
+          description: schema.openSourceContributions.description,
+          pr_links: schema.openSourceContributions.pr_links,
+          tech_stack: schema.openSourceContributions.tech_stack,
+          role: schema.openSourceContributions.role,
+        })
+        .from(schema.openSourceContributions)
+        .where(eq(schema.openSourceContributions.candidate_id, id));
+      return rows.map((r) => ({ ...r, pr_links: r.pr_links ?? [], tech_stack: r.tech_stack ?? [] }));
+    }, []);
+    const changed = await replaceChildren(
+      db,
+      "open_source_contributions",
+      id,
+      nextOss,
+      ossRows as Record<string, unknown>[],
+      "open source",
+      putWarnings,
+    );
+    if (changed && !sameRows(nextOss, ossRows as unknown[])) materialChanged = true;
   }
   if (present.has("education")) {
-    try {
-      const nextEdu = (c.education ?? []).filter((e) => e.institution).map((e) => {
-        const yrs = (e.years || "").match(/\d{4}/g) ?? [];
-        return {
-          institution: e.institution,
-          degree: e.degree || null,
-          field_of_study: e.field || null,
-          start_year: yrs[0] ? Number(yrs[0]) : null,
-          end_year: yrs[1] ? Number(yrs[1]) : null,
-          achievements: e.achievements || null,
-        };
-      });
-      const educationCol = await col<AppDoc>(Collections.education);
-      const eduRows = await educationCol
-        .find(
-          { candidate_id: id },
-          {
-            projection: {
-              institution: 1,
-              degree: 1,
-              field_of_study: 1,
-              start_year: 1,
-              end_year: 1,
-              achievements: 1,
-              _id: 0,
-            },
-          },
-        )
-        .toArray();
-      if (!sameRows(nextEdu, eduRows as unknown[])) {
-        materialChanged = true;
-        await educationCol.deleteMany({ candidate_id: id });
-        if (nextEdu.length) {
-          try {
-            await educationCol.insertMany(nextEdu.map((r) => ({ _id: randomUUID(), candidate_id: id, ...r })));
-          } catch (e) {
-            console.error("[candidates] education replace failed", redactPii((e as Error).message));
-            putWarnings.push("education: could not save (code EDU_SAVE)");
-            await restoreRows(Collections.education, id, eduRows as unknown[], "education");
-          }
-        }
-      }
-    } catch (e) {
-      console.error("[candidates] education replace threw", redactPii((e as Error).message));
-      putWarnings.push("education: could not save (code EDU_SAVE)");
-    }
+    const nextEdu = (c.education ?? []).filter((e) => e.institution).map((e) => {
+      const yrs = (e.years || "").match(/\d{4}/g) ?? [];
+      return {
+        institution: e.institution,
+        degree: e.degree || null,
+        field_of_study: e.field || null,
+        start_year: yrs[0] ? Number(yrs[0]) : null,
+        end_year: yrs[1] ? Number(yrs[1]) : null,
+        achievements: e.achievements || null,
+      };
+    });
+    const eduRows = await readPrev(async () => {
+      const rows = await db
+        .select({
+          institution: schema.education.institution,
+          degree: schema.education.degree,
+          field_of_study: schema.education.field_of_study,
+          start_year: schema.education.start_year,
+          end_year: schema.education.end_year,
+          achievements: schema.education.achievements,
+        })
+        .from(schema.education)
+        .where(eq(schema.education.candidate_id, id));
+      return rows.map((r) => ({ ...r }));
+    }, []);
+    const changed = await replaceChildren(
+      db,
+      "education",
+      id,
+      nextEdu,
+      eduRows as Record<string, unknown>[],
+      "education",
+      putWarnings,
+    );
+    if (changed && !sameRows(nextEdu, eduRows as unknown[])) materialChanged = true;
   }
   if (present.has("skills")) {
     try {
-      const { canon, byName, ok: skillsOk } = await skillIdMap(c.skills ?? []);
+      const { canon, byName, ok: skillsOk } = await skillIdMap(db, c.skills ?? []);
       const nextNames = [...canon.map((s) => s.toLowerCase())].sort();
-      const candidateSkills = await col<AppDoc>(Collections.candidateSkills);
-      const skillsCol = await col<AppDoc>(Collections.skills);
       let haveNames: string[] | null = null;
       try {
-        const haveLinks = await candidateSkills
-          .find({ candidate_id: id }, { projection: { skill_id: 1, _id: 0 } })
-          .toArray();
-        const skillIds = [...new Set(haveLinks.map((r) => String(r.skill_id ?? "")))].filter(Boolean);
+        const haveLinks = await db
+          .select({ skill_id: schema.candidateSkills.skill_id })
+          .from(schema.candidateSkills)
+          .where(eq(schema.candidateSkills.candidate_id, id));
+        const skillIds = [...new Set(haveLinks.map((r) => r.skill_id))].filter(Boolean);
         const skillDocs = skillIds.length
-          ? await skillsCol.find({ _id: { $in: skillIds } }, { projection: { name: 1 } }).toArray()
+          ? await db
+              .select({ name: schema.skills.name })
+              .from(schema.skills)
+              .where(inArray(schema.skills.id, skillIds))
           : [];
-        haveNames = skillDocs
-          .map((s) => String(s.name ?? "").toLowerCase())
-          .filter(Boolean)
-          .sort();
+        haveNames = skillDocs.map((s) => s.name.toLowerCase()).filter(Boolean).sort();
       } catch {
         haveNames = null;
       }
@@ -1413,19 +1417,11 @@ export async function PUT(request: Request) {
         });
         if (!(links.length > 0 && JSON.stringify(nextNames) === JSON.stringify(haveNames))) {
           materialChanged = true;
-          await candidateSkills.deleteMany({ candidate_id: id });
+          await db.delete(schema.candidateSkills).where(eq(schema.candidateSkills.candidate_id, id));
           if ((c.skills ?? []).length > 0) {
             if (links.length) {
               try {
-                await candidateSkills.bulkWrite(
-                  links.map((l) => ({
-                    updateOne: {
-                      filter: { candidate_id: l.candidate_id, skill_id: l.skill_id },
-                      update: { $set: { candidate_id: l.candidate_id, skill_id: l.skill_id, source: l.source } },
-                      upsert: true,
-                    },
-                  })),
-                );
+                await db.insert(schema.candidateSkills).values(links).onConflictDoNothing();
               } catch (e) {
                 console.error("[candidates] skills replace failed", redactPii((e as Error).message));
                 putWarnings.push("skills: could not save (code SKL_SAVE)");
@@ -1435,15 +1431,7 @@ export async function PUT(request: Request) {
                 });
                 if (prevLinks.length) {
                   try {
-                    await candidateSkills.bulkWrite(
-                      prevLinks.map((l) => ({
-                        updateOne: {
-                          filter: { candidate_id: l.candidate_id, skill_id: l.skill_id },
-                          update: { $set: { candidate_id: l.candidate_id, skill_id: l.skill_id, source: l.source } },
-                          upsert: true,
-                        },
-                      })),
-                    );
+                    await db.insert(schema.candidateSkills).values(prevLinks).onConflictDoNothing();
                   } catch {
                   }
                 }
@@ -1462,21 +1450,20 @@ export async function PUT(request: Request) {
 
   if (materialChanged) {
     try {
-      await candidates.updateOne({ _id: id }, { $set: { updated_at: new Date() } });
+      await db
+        .update(schema.candidates)
+        .set({ updated_at: new Date().toISOString() })
+        .where(eq(schema.candidates.id, id));
     } catch {
     }
-    try {
-      await inngest.send({ name: "candidate.profile.submitted", data: { candidateId: id } });
-    } catch (e) {
-      console.error("[candidates] pipeline enqueue failed", redactPii((e as Error)?.message ?? String(e)).slice(0, 200));
-    }
+    await enqueuePipeline(id);
   }
 
   return Response.json({ candidateId: id, status: "processing", warnings: putWarnings });
 }
 
 export async function DELETE(request: Request) {
-  const rl = rateLimit(request, { key: "candidates-delete", limit: 10, windowMs: 10 * 60_000 });
+  const rl = await rateLimit(request, { key: "candidates-delete", limit: 10, windowMs: 10 * 60_000 });
   if (!rl.ok) return rateLimitResponse(rl.retryAfterMs);
   const url = new URL(request.url);
   let body: unknown = null;
@@ -1495,32 +1482,42 @@ export async function DELETE(request: Request) {
   const denied = await guardOwnerAuth(request, id as string);
   if (denied) return denied;
 
-  let doomed: Record<string, unknown> | null = null;
+  const db = await getDb();
+  let doomed: {
+    resume_url: string | null;
+    photo_url: string | null;
+    portfolio_url: string | null;
+  } | null = null;
   try {
-    doomed = await (await col<AppDoc>(Collections.candidates)).findOne(
-      { _id: id as string },
-      { projection: { resume_url: 1, photo_url: 1, portfolio_url: 1, _id: 0 } },
-    );
+    const rows = await db
+      .select({
+        resume_url: schema.candidates.resume_url,
+        photo_url: schema.candidates.photo_url,
+        portfolio_url: schema.candidates.portfolio_url,
+      })
+      .from(schema.candidates)
+      .where(eq(schema.candidates.id, id as string))
+      .limit(1);
+    doomed = rows[0] ?? null;
   } catch {
     doomed = null;
   }
   try {
-    await cascadeDeleteCandidate(id as string);
+    await cascadeDeleteCandidate(db, id as string);
   } catch {
     console.error("[candidates] delete failed");
     return Response.json({ error: "candidate delete failed" }, { status: 500 });
   }
   try {
-    const paths = doomed as { resume_url?: string | null; photo_url?: string | null; portfolio_url?: string | null } | null;
     const jobs: Promise<void>[] = [];
-    if (paths?.resume_url && !/^https?:\/\//i.test(paths.resume_url)) {
-      jobs.push(deleteObject("resumes", paths.resume_url));
+    if (doomed?.resume_url && !/^https?:\/\//i.test(doomed.resume_url)) {
+      jobs.push(deleteObject("resumes", doomed.resume_url));
     }
-    if (paths?.photo_url && !/^https?:\/\//i.test(paths.photo_url)) {
-      jobs.push(deleteObject("photos", paths.photo_url));
+    if (doomed?.photo_url && !/^https?:\/\//i.test(doomed.photo_url)) {
+      jobs.push(deleteObject("photos", doomed.photo_url));
     }
-    if (paths?.portfolio_url && !/^https?:\/\//i.test(paths.portfolio_url)) {
-      jobs.push(deleteObject("portfolios", paths.portfolio_url));
+    if (doomed?.portfolio_url && !/^https?:\/\//i.test(doomed.portfolio_url)) {
+      jobs.push(deleteObject("portfolios", doomed.portfolio_url));
     }
     if (jobs.length) await Promise.all(jobs);
   } catch {

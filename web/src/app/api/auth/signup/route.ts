@@ -1,15 +1,12 @@
 import { randomUUID } from "crypto";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
+import { getDb, schema } from "@/db/client";
 import { readJsonBody } from "@/lib/http";
 import { clientIp, rateLimit, rateLimitResponse } from "@/lib/rate-limit";
-import { hashPassword, passwordPolicyError } from "@/lib/password";
-import { AppDoc, col, Collections } from "@/lib/mongo";
+import { hashPasswordRemote, passwordPolicyError } from "@/lib/password";
 import { createSession, setSessionCookie } from "@/lib/session";
-import {
-  authLoginPayload,
-  ensureAuthIndexes,
-  loadSessionUserById,
-} from "@/lib/auth-user";
+import { authLoginPayload, loadSessionUserById } from "@/lib/auth-user";
 import { normalizeEmail } from "@/lib/validators";
 
 /**
@@ -36,12 +33,14 @@ const EXISTS_409 = {
   code: "exists",
 } as const;
 
-function isDuplicateKey(e: unknown): boolean {
-  return typeof e === "object" && e !== null && (e as { code?: unknown }).code === 11000;
+function isUniqueViolation(e: unknown): boolean {
+  if (typeof e !== "object" || e === null) return false;
+  const msg = String((e as { message?: string }).message ?? "");
+  return /UNIQUE constraint failed/i.test(msg);
 }
 
 export async function POST(request: Request): Promise<Response> {
-  const ipLimit = rateLimit(request, {
+  const ipLimit = await rateLimit(request, {
     key: "auth-signup",
     limit: 10,
     windowMs: 10 * 60_000,
@@ -65,7 +64,7 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: "Enter a valid email." }, { status: 400 });
   }
 
-  const emailLimit = rateLimit(request, {
+  const emailLimit = await rateLimit(request, {
     key: "auth-signup-email",
     limit: 10,
     windowMs: 10 * 60_000,
@@ -73,12 +72,11 @@ export async function POST(request: Request): Promise<Response> {
   });
   if (!emailLimit.ok) return rateLimitResponse(emailLimit.retryAfterMs);
 
-  await ensureAuthIndexes();
-
-  const users = await col<AppDoc>(Collections.users);
-  let raw: AppDoc | null;
+  const db = await getDb();
+  let raw: typeof schema.users.$inferSelect | undefined;
   try {
-    raw = await users.findOne({ email });
+    const rows = await db.select().from(schema.users).where(eq(schema.users.email, email)).limit(1);
+    raw = rows[0];
   } catch (e) {
     console.error("[auth/signup] lookup failed", e instanceof Error ? e.message : e);
     return Response.json({ error: "Could not create the account. Try again." }, { status: 503 });
@@ -88,7 +86,7 @@ export async function POST(request: Request): Promise<Response> {
     // Candidate-owned check first — identical to the login route's 403.
     let existing: Awaited<ReturnType<typeof loadSessionUserById>>;
     try {
-      existing = await loadSessionUserById(String(raw._id));
+      existing = await loadSessionUserById(raw.id);
     } catch (e) {
       console.error("[auth/signup] session load failed", e instanceof Error ? e.message : e);
       return Response.json({ error: "Could not create the account. Try again." }, { status: 503 });
@@ -99,40 +97,42 @@ export async function POST(request: Request): Promise<Response> {
         { status: 403 },
       );
     }
-    if (typeof raw.status === "string" && raw.status !== "active") {
+    if (raw.status !== "active") {
       return Response.json({ error: "Account suspended." }, { status: 403 });
     }
-    if (typeof raw.password_hash === "string" && raw.password_hash) {
+    if (raw.password_hash) {
       return Response.json(EXISTS_409, { status: 409 });
     }
 
     // Passwordless row: claim on signup. Role stays as-is (orphan
     // candidate rows flip to employer at the company-registration stage).
     try {
-      const password_hash = await hashPassword(parsed.data.password);
-      await users.updateOne({ _id: raw._id }, { $set: { password_hash } });
+      const password_hash = await hashPasswordRemote(parsed.data.password);
+      await db
+        .update(schema.users)
+        .set({ password_hash })
+        .where(eq(schema.users.id, raw.id));
     } catch (e) {
       console.error("[auth/signup] password set failed", e instanceof Error ? e.message : e);
       return Response.json({ error: "Could not create the account. Try again." }, { status: 503 });
     }
-    return finishSignup(request, String(raw._id));
+    return finishSignup(request, raw.id);
   }
 
   // New account — the hire side always starts as employer.
-  const password_hash = await hashPassword(parsed.data.password);
+  const password_hash = await hashPasswordRemote(parsed.data.password);
   const userId = randomUUID();
   try {
-    await users.insertOne({
-      _id: userId,
+    await db.insert(schema.users).values({
+      id: userId,
       email,
       password_hash,
       role: "employer",
       status: "active",
       email_verified: false,
-      created_at: new Date(),
     });
   } catch (e) {
-    if (isDuplicateKey(e)) {
+    if (isUniqueViolation(e)) {
       return Response.json(EXISTS_409, { status: 409 });
     }
     console.error("[auth/signup] insert failed", e instanceof Error ? e.message : e);

@@ -47,3 +47,9 @@ const nextConfig: NextConfig = {
 };
 
 export default nextConfig;
+
+if (process.env.NODE_ENV === "development") {
+  // Exposes Cloudflare bindings (D1, R2, Vectorize, DOs) to `next dev`.
+  // Must not run during `next build`, where it pulls in wrangler remote auth.
+  void import("@opennextjs/cloudflare").then((m) => m.initOpenNextCloudflareForDev());
+}

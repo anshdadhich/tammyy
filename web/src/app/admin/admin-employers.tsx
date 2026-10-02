@@ -52,7 +52,7 @@ export default function AdminEmployers({
     setError("");
     try {
       const res = await fetch(`/api/admin/employers?status=${next}`, { cache: "no-store" });
-      const json = await res.json().catch(() => ({}));
+      const json = (await res.json().catch(() => ({}))) as { error?: string; employers?: AdminEmployer[] };
       if (!res.ok) {
         setError(json.error || "Something went wrong");
         return;
@@ -80,7 +80,7 @@ export default function AdminEmployers({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(plan ? { employerId, action, plan } : { employerId, action }),
       });
-      const json = await res.json().catch(() => ({}));
+      const json = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok) {
         setError(json.error || "Something went wrong");
         return;

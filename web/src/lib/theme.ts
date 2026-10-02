@@ -15,8 +15,13 @@ export function applyTheme(next: "light" | "dark") {
   const start = (document as ViewTransitionDoc).startViewTransition;
   if (!reduce && typeof start === "function") {
     start.call(document, apply);
-  } else {
-    apply();
+    return;
+  }
+  apply();
+  if (!reduce) {
+    // Soft cross-fade on runtimes without the View Transitions API.
+    document.body.classList.add("theme-flipping");
+    window.setTimeout(() => document.body.classList.remove("theme-flipping"), 260);
   }
 }
 

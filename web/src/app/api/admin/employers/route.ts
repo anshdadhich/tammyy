@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
+import { eq } from "drizzle-orm";
 import { AuthError, requireRole } from "@/lib/auth";
-import { AppDoc, col, Collections } from "@/lib/mongo";
+import { getDb, schema } from "@/db/client";
 import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { z } from "zod";
 import { readJsonBody } from "@/lib/http";
@@ -11,7 +12,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const STATUS_VALUES = ["pending", "verified", "rejected", "suspended", "all"] as const;
 
 export async function GET(request: Request) {
-  const rl = rateLimit(request, { key: "admin-employers-get", limit: 30, windowMs: 60_000 });
+  const rl = await rateLimit(request, { key: "admin-employers-get", limit: 30, windowMs: 60_000 });
   if (!rl.ok) return rateLimitResponse(rl.retryAfterMs);
   try {
     await requireRole("admin");
@@ -37,7 +38,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const rl = rateLimit(request, { key: "admin-employers-post", limit: 30, windowMs: 10 * 60_000 });
+  const rl = await rateLimit(request, { key: "admin-employers-post", limit: 30, windowMs: 10 * 60_000 });
   if (!rl.ok) return rateLimitResponse(rl.retryAfterMs);
   try {
     await requireRole("admin");
@@ -65,48 +66,43 @@ export async function POST(request: Request) {
     if (!ok) return Response.json({ error: "plan update failed" }, { status: 500 });
     return Response.json({ employerId, plan: parsed.data.plan });
   }
-  let data: { _id: string; company_name?: string | null; verification_status?: string } | null = null;
+  let data: { id: string; company_name?: string | null; verification_status?: string } | undefined;
   try {
-    const employers = await col<{
-      _id: string;
-      company_name?: string | null;
-      verification_status?: string;
-    }>(Collections.employers);
-    data = await employers.findOneAndUpdate(
-      { _id: employerId },
-      {
-        $set: {
-          verification_status: action === "verify" ? "verified" : "rejected",
-          updated_at: new Date(),
-        },
-      },
-      {
-        returnDocument: "after",
-        projection: { company_name: 1, verification_status: 1 },
-      },
-    );
+    const db = await getDb();
+    const updated = await db
+      .update(schema.employers)
+      .set({
+        verification_status: action === "verify" ? "verified" : "rejected",
+        updated_at: new Date().toISOString(),
+      })
+      .where(eq(schema.employers.id, employerId))
+      .returning({
+        id: schema.employers.id,
+        company_name: schema.employers.company_name,
+        verification_status: schema.employers.verification_status,
+      });
+    data = updated[0];
   } catch {
-    data = null;
+    data = undefined;
   }
   if (!data) {
     console.error("[admin] employer update failed");
     return Response.json({ error: "employer not found" }, { status: 404 });
   }
   const employer = {
-    id: data._id,
+    id: data.id,
     company_name: data.company_name ?? null,
     verification_status: data.verification_status ?? null,
   };
 
   try {
-    const auditLogs = await col<AppDoc>(Collections.auditLogs);
-    await auditLogs.insertOne({
-      _id: randomUUID(),
+    const db = await getDb();
+    await db.insert(schema.auditLogs).values({
+      id: randomUUID(),
       action: action === "verify" ? "employer_verified" : "employer_rejected",
       target_type: "employer",
       target_id: employerId,
-      metadata: { company_name: employer.company_name },
-      created_at: new Date(),
+      metadata_json: { company_name: employer.company_name },
     });
   } catch {
   }

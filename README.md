@@ -83,11 +83,51 @@ Checks `GET /` → 200 and expected unauthenticated API responses.
 
 All email sends are wrapped in try/catch - missing `RESEND_API_KEY` never breaks an API response.
 
-## Deploy notes (Vercel + MongoDB)
+## Deploy notes (Cloudflare free tier)
 
-- MongoDB: create a cluster (e.g. MongoDB Atlas) → set `MONGODB_URI` / `MONGODB_DB`. Auth indexes (unique `users.email`, sessions TTL) are created automatically on first login.
-- Vercel: import `web/` as the project root, set all env vars above (server: `MONGODB_URI`, `VOYAGE_API_KEY`, `OPENROUTER_API_KEY`, `RESEND_API_KEY`, `SESSION_SECRET`, `BOOTSTRAP_SECRET`), deploy. Prod hardening: HR verification is fail-closed by default (no flag needed) + set `BOOTSTRAP_SECRET` (locks `/api/admin/bootstrap`).
-- Admin bootstrap: sign up first, then `POST /api/admin/bootstrap` with the bootstrap secret to promote your account to admin.
-- Inngest: create an Inngest project, set `INNGEST_EVENT_KEY` / `INNGEST_SIGNING_KEY` in Vercel, point Inngest to `https://<app>/api/webhooks/inngest` as the serving endpoint.
-- File uploads are stored on local disk (`STORAGE_DIR`, default `<project>/storage`) — mount a persistent volume or swap `lib/storage.ts` for object storage when moving beyond a single instance.
-- Seeding: run `node scripts/seed-mongo.mjs` only for staging; never on prod (demo `@demo.local` rows).
+The whole stack runs on Cloudflare: Workers (Next.js via `@opennextjs/cloudflare`), D1 (records), Vectorize + Workers AI (semantic search), R2 (files), Durable Objects (password hashing, rate limits), Workflows (profile pipeline). No other vendors required; Resend stays optional for email.
+
+### 1. Create the Cloudflare resources (free tier)
+
+```bash
+cd web
+npx wrangler d1 create tammy            # paste the database_id into wrangler.jsonc
+npx wrangler r2 bucket create tammy-media
+npx wrangler vectorize index create tammy-profile-chunks --dimensions=384 --metric=cosine
+```
+
+### 2. Apply the D1 schema
+
+```bash
+npx wrangler d1 migrations apply tammy --remote
+```
+
+### 3. Set secrets
+
+```bash
+npx wrangler secret put SESSION_SECRET
+npx wrangler secret put BOOTSTRAP_SECRET
+# optional: presigned direct-to-R2 uploads (photo bytes skip the Worker)
+npx wrangler secret put R2_ACCOUNT_ID
+npx wrangler secret put R2_ACCESS_KEY_ID
+npx wrangler secret put R2_SECRET_ACCESS_KEY
+npx wrangler secret put OPENROUTER_API_KEY   # deep-read judge + summaries
+npx wrangler secret put RESEND_API_KEY       # optional email
+```
+
+### 4. Build and deploy
+
+```bash
+npm run deploy     # opennextjs-cloudflare build && deploy
+```
+
+Then sign up and promote the admin once:
+`POST /api/admin/bootstrap` with the bootstrap secret in the `x-bootstrap-secret` header.
+
+### Capacity notes (free tier)
+
+- Workers: 100k requests/day. Password hashing runs in a Durable Object (30s CPU) because no production-strength hash fits the 10ms request budget; search similarity runs in Vectorize for the same reason.
+- Vectorize free: 5M stored dimensions ≈ 13k chunks at 384 dims (~2k candidates at 6 chunks each, ~13k at 1 chunk). This is the first limit to watch; $5/mo Workers Paid doubles it.
+- D1 free: 500MB (~100k candidate rows once vectors live in Vectorize).
+- R2 free: 10GB, zero egress. Presigned PUTs keep upload bytes off the Worker entirely.
+- File uploads store `{uuid}/{filename}` keys; access control stays in `GET /api/uploads`, which re-checks the session (and emits presigned GETs when R2 S3 credentials are configured).

@@ -1,9 +1,10 @@
-import { AppDoc, col, Collections } from "@/lib/mongo";
+import { and, desc, eq } from "drizzle-orm";
+import { getDb, schema } from "@/db/client";
 import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { readJsonBody } from "@/lib/http";
 
 export async function POST(request: Request) {
-  const rl = rateLimit(request, { key: "candidates-lookup", limit: 10, windowMs: 10 * 60_000 });
+  const rl = await rateLimit(request, { key: "candidates-lookup", limit: 10, windowMs: 10 * 60_000 });
   if (!rl.ok) return rateLimitResponse(rl.retryAfterMs);
   const read = await readJsonBody(request, 4 * 1024);
   if (!read.ok) return read.response;
@@ -17,16 +18,19 @@ export async function POST(request: Request) {
     return Response.json({ error: "Enter a valid email." }, { status: 400 });
   }
   try {
-    const candidates = await col<AppDoc>(Collections.candidates);
-    const row = await candidates
-      .find(
-        { contact_email: email, visibility_status: "visible" },
-        { projection: { _id: 1 } },
+    const db = await getDb();
+    const rows = await db
+      .select({ id: schema.candidates.id })
+      .from(schema.candidates)
+      .where(
+        and(
+          eq(schema.candidates.contact_email, email),
+          eq(schema.candidates.visibility_status, "visible"),
+        ),
       )
-      .sort({ created_at: -1 })
-      .limit(1)
-      .next();
-    return Response.json({ exists: !!row?._id });
+      .orderBy(desc(schema.candidates.created_at))
+      .limit(1);
+    return Response.json({ exists: !!rows[0]?.id });
   } catch {
     return Response.json({ error: "Lookup failed. Try again." }, { status: 500 });
   }

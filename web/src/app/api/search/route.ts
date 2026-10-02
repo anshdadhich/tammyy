@@ -1,10 +1,12 @@
 import { createHash, randomUUID } from "crypto";
+import { and, desc, eq, gt, inArray } from "drizzle-orm";
+import { getDb, schema } from "@/db/client";
 import { requireHrDb, getSessionUser } from "@/lib/auth-user";
 import { jobSchema } from "@/lib/validators";
 import type { JobReq } from "@/lib/matching/types";
-import { buildJobQueryText, embedQuery, assertEmbeddingDim, EMBEDDING_DIM } from "@/lib/matching/voyage";
+import { embedQuery, EMBEDDING_DIM } from "@/lib/embeddings";
 import { buildFtsTerms } from "@/lib/matching/hybrid";
-import { matchChunks, type MatchChunksParams } from "@/lib/matching/mongo-retrieval";
+import { matchChunks, type MatchChunksParams, type MatchChunksRow } from "@/lib/matching/retrieval";
 import { applyContactPrefs, lockContacts, revealedCandidateIds } from "@/lib/contact-prefs";
 import { checkSearchQuota } from "@/lib/quotas";
 import { defaultOpenAIProvider, judgeTop, type JudgeInput, type JudgeResult } from "@/lib/matching/judge";
@@ -13,7 +15,6 @@ import { withWideEvent } from "@/lib/observe";
 import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { redactPii } from "@/lib/redact";
 import { readJsonBody } from "@/lib/http";
-import { AppDoc, Collections } from "@/lib/mongo";
 
 const MATCH_COUNT = 200;
 const PER_CANDIDATE_CHUNKS = 3;
@@ -25,29 +26,25 @@ const MAX_EXP_ATTACH = 5;
 const MAX_PROJECTS_ATTACH = 6;
 const MAX_OSSTP_ATTACH = 6;
 
-const CAND_COLS_BASE = [
-  "full_name", "headline", "domain", "total_experience_years", "min_salary", "salary_frequency",
-  "linkedin_url", "github_url", "portfolio_url", "resume_url", "photo_url", "profile_strength",
-  "remote_preference", "location_city", "availability_status", "show_email", "show_phone",
-  "show_linkedin", "show_github", "show_portfolio", "show_resume", "show_photo",
-] as const;
-const CONTACT_COLS = ["contact_email", "contact_phone"] as const;
-const JUDGE_CAND_COLS = [
-  "full_name", "headline", "domain", "total_experience_years", "min_salary",
-  "location_city", "remote_preference", "availability_status",
-] as const;
-
-/** Mongo projection for a column list (`_id` comes along; mapped to `id`). */
-function projection(cols: readonly string[]): Record<string, 1> {
-  const p: Record<string, 1> = {};
-  for (const c of cols) p[c] = 1;
-  return p;
-}
-
-/** `_id` -> `id` (the response contract) and strips `_id` from payloads. */
-function toRow(doc: AppDoc): Record<string, unknown> {
-  const { _id, ...rest } = doc;
-  return { ...rest, id: _id };
+function buildJobQueryText(job: {
+  job_title: string;
+  must_have_skills: string[];
+  nice_to_have_skills?: string[];
+  core_responsibilities?: string[];
+  domain?: string;
+}): string {
+  const parts = [
+    `Role: ${job.job_title}`,
+    job.domain ? `Domain: ${job.domain}` : "",
+    `Must-have: ${job.must_have_skills.join(", ")}`,
+    job.nice_to_have_skills?.length
+      ? `Nice-to-have: ${job.nice_to_have_skills.join(", ")}`
+      : "",
+    job.core_responsibilities?.length
+      ? `Responsibilities: ${job.core_responsibilities.join("; ")}`
+      : "",
+  ].filter(Boolean);
+  return parts.join("\n");
 }
 
 function normalizeQueryText(s: string): string {
@@ -74,23 +71,6 @@ function searchHash(queryText: string, job: JobReq, deep: boolean): string {
   return createHash("sha256").update(`${normalizeQueryText(queryText)}\n${canonicalFilters(job)}\ndeep:${deep ? 1 : 0}`).digest("hex");
 }
 
-function parseStoredEmbedding(v: unknown): number[] | null {
-  try {
-    let arr: unknown = v;
-    if (typeof v === "string") {
-      const t = v.trim();
-      if (!t.startsWith("[") || !t.endsWith("]")) return null;
-      arr = t.slice(1, -1).split(",").map(Number);
-    }
-    if (!Array.isArray(arr)) return null;
-    const nums = (arr as unknown[]).map(Number);
-    assertEmbeddingDim(nums);
-    return nums;
-  } catch {
-    return null;
-  }
-}
-
 function isJudgePayload(v: unknown): v is JudgeResult {
   if (!v || typeof v !== "object" || Array.isArray(v)) return false;
   const r = v as Record<string, unknown>;
@@ -101,7 +81,7 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
   const session = await getSessionUser();
   const hr = await requireHrDb(session);
   if (hr instanceof Response) return hr;
-  const reader = hr.client;
+  const db = await getDb();
   const quota = await checkSearchQuota(hr.employerId);
   wev.add({ quota_plan: quota.plan, quota_used: quota.used, quota_limit: quota.limit });
   if (!quota.ok) {
@@ -115,7 +95,7 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
   if (!read.ok) return read.response;
   const body = read.body as { deep?: unknown; limit?: unknown; job?: unknown } | null;
   const deep = body?.deep === true;
-  const rl = rateLimit(request, {
+  const rl = await rateLimit(request, {
     key: deep ? "search-deep" : "search",
     limit: deep ? 10 : 60,
     windowMs: deep ? 10 * 60_000 : 60_000,
@@ -187,47 +167,74 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
     if (!ids.length) return;
     try {
       const [expRows, projRows, eduRows, ossRows] = await Promise.all([
-        reader.collection<AppDoc>(Collections.workExperiences)
-          .find(
-            { candidate_id: { $in: ids } },
-            { projection: projection(["candidate_id", "company_name", "job_title", "start_date", "end_date", "is_current", "description", "achievements", "tech_stack"]) },
-          )
-          .sort({ start_date: -1 })
-          .limit(ids.length * MAX_EXP_ATTACH)
-          .toArray(),
-        reader.collection<AppDoc>(Collections.projects)
-          .find(
-            { candidate_id: { $in: ids } },
-            { projection: projection(["candidate_id", "title", "description", "problem_statement", "tech_stack", "role_in_project", "project_link", "repo_link", "deployment_link", "impact_summary", "project_type"]) },
-          )
-          .limit(ids.length * MAX_PROJECTS_ATTACH)
-          .toArray(),
-        reader.collection<AppDoc>(Collections.education)
-          .find(
-            { candidate_id: { $in: ids } },
-            { projection: projection(["candidate_id", "institution", "degree", "field_of_study", "start_year", "end_year", "achievements"]) },
-          )
-          .sort({ start_year: -1 })
-          .limit(ids.length * MAX_EXP_ATTACH)
-          .toArray(),
-        reader.collection<AppDoc>(Collections.openSourceContributions)
-          .find(
-            { candidate_id: { $in: ids } },
-            { projection: projection(["candidate_id", "repo_name", "repo_url", "description", "pr_links", "tech_stack", "role"]) },
-          )
-          .limit(ids.length * MAX_OSSTP_ATTACH)
-          .toArray(),
+        db
+          .select({
+            candidate_id: schema.workExperiences.candidate_id,
+            company_name: schema.workExperiences.company_name,
+            job_title: schema.workExperiences.job_title,
+            start_date: schema.workExperiences.start_date,
+            end_date: schema.workExperiences.end_date,
+            is_current: schema.workExperiences.is_current,
+            description: schema.workExperiences.description,
+            achievements: schema.workExperiences.achievements,
+            tech_stack: schema.workExperiences.tech_stack,
+          })
+          .from(schema.workExperiences)
+          .where(inArray(schema.workExperiences.candidate_id, ids))
+          .limit(ids.length * MAX_EXP_ATTACH),
+        db
+          .select({
+            id: schema.projects.id,
+            candidate_id: schema.projects.candidate_id,
+            title: schema.projects.title,
+            description: schema.projects.description,
+            problem_statement: schema.projects.problem_statement,
+            tech_stack: schema.projects.tech_stack,
+            role_in_project: schema.projects.role_in_project,
+            project_link: schema.projects.project_link,
+            repo_link: schema.projects.repo_link,
+            deployment_link: schema.projects.deployment_link,
+            impact_summary: schema.projects.impact_summary,
+            project_type: schema.projects.project_type,
+          })
+          .from(schema.projects)
+          .where(inArray(schema.projects.candidate_id, ids))
+          .limit(ids.length * MAX_PROJECTS_ATTACH),
+        db
+          .select({
+            candidate_id: schema.education.candidate_id,
+            institution: schema.education.institution,
+            degree: schema.education.degree,
+            field_of_study: schema.education.field_of_study,
+            start_year: schema.education.start_year,
+            end_year: schema.education.end_year,
+            achievements: schema.education.achievements,
+          })
+          .from(schema.education)
+          .where(inArray(schema.education.candidate_id, ids))
+          .limit(ids.length * MAX_EXP_ATTACH),
+        db
+          .select({
+            candidate_id: schema.openSourceContributions.candidate_id,
+            repo_name: schema.openSourceContributions.repo_name,
+            repo_url: schema.openSourceContributions.repo_url,
+            description: schema.openSourceContributions.description,
+            pr_links: schema.openSourceContributions.pr_links,
+            tech_stack: schema.openSourceContributions.tech_stack,
+            role: schema.openSourceContributions.role,
+          })
+          .from(schema.openSourceContributions)
+          .where(inArray(schema.openSourceContributions.candidate_id, ids))
+          .limit(ids.length * MAX_OSSTP_ATTACH),
       ]);
-      const assign = (key: string, data: AppDoc[], cap: number, keepId: boolean): void => {
+      const assign = (key: string, data: Record<string, unknown>[], cap: number, keepId: boolean): void => {
         const buckets = new Map<string, Record<string, unknown>[]>();
         for (const raw of data) {
           const cid = String(raw.candidate_id ?? "");
           if (!cid) continue;
-          const { _id, ...rest } = raw;
-          const entry: Record<string, unknown> = { ...rest };
+          const entry: Record<string, unknown> = { ...raw };
           delete entry.candidate_id;
-          delete entry._id;
-          if (keepId) entry.id = _id;
+          if (!keepId) delete entry.id;
           const bucket = buckets.get(cid) ?? [];
           if (bucket.length < cap) bucket.push(entry);
           buckets.set(cid, bucket);
@@ -237,10 +244,10 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
           if (bucket?.length) r[key] = bucket;
         }
       };
-      assign("work_experiences", expRows, MAX_EXP_ATTACH, false);
-      assign("projects", projRows, MAX_PROJECTS_ATTACH, true);
-      assign("education", eduRows, MAX_EXP_ATTACH, false);
-      assign("open_source_contributions", ossRows, MAX_OSSTP_ATTACH, false);
+      assign("work_experiences", expRows as unknown as Record<string, unknown>[], MAX_EXP_ATTACH, false);
+      assign("projects", projRows as unknown as Record<string, unknown>[], MAX_PROJECTS_ATTACH, true);
+      assign("education", eduRows as unknown as Record<string, unknown>[], MAX_EXP_ATTACH, false);
+      assign("open_source_contributions", ossRows as unknown as Record<string, unknown>[], MAX_OSSTP_ATTACH, false);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error(`[search] attach profiles failed detail=${redactPii(msg.slice(0, 200))}`);
@@ -251,14 +258,20 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
     const ids = [...new Set(target.map((r) => String(r.id ?? "")).filter(Boolean))];
     if (!ids.length) return;
     try {
-      const docs = await reader
-        .collection<AppDoc>(Collections.candidates)
-        .find(
-          { _id: { $in: ids }, visibility_status: "visible" },
-          { projection: projection(CONTACT_COLS) },
-        )
-        .toArray();
-      const byId = new Map(docs.map((c) => [String(c._id), c]));
+      const docs = await db
+        .select({
+          id: schema.candidates.id,
+          contact_email: schema.candidates.contact_email,
+          contact_phone: schema.candidates.contact_phone,
+        })
+        .from(schema.candidates)
+        .where(
+          and(
+            inArray(schema.candidates.id, ids),
+            eq(schema.candidates.visibility_status, "visible"),
+          ),
+        );
+      const byId = new Map(docs.map((c) => [c.id, c]));
       for (const r of target) {
         const c = byId.get(String(r.id ?? ""));
         if (!c) continue;
@@ -278,53 +291,41 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
       return withPrefs;
     });
 
-  const findRecentSearch = async (): Promise<{ id: string; created_at: Date; query_embedding: unknown } | null> => {
+  const findRecentSearch = async (): Promise<{ id: string; created_at: string } | null> => {
     try {
-      const doc = await reader
-        .collection<AppDoc>(Collections.searches)
-        .find(
-          { employer_id: hr.employerId, query_hash: qhash, created_at: { $gt: new Date(since) } },
-          { projection: { created_at: 1, query_embedding: 1 } },
+      const rows = await db
+        .select({ id: schema.searches.id, created_at: schema.searches.created_at })
+        .from(schema.searches)
+        .where(
+          and(
+            eq(schema.searches.employer_id, hr.employerId),
+            eq(schema.searches.query_hash, qhash),
+            gt(schema.searches.created_at, since),
+          ),
         )
-        .sort({ created_at: -1 })
-        .limit(1)
-        .next();
-      return doc
-        ? { id: String(doc._id), created_at: doc.created_at as Date, query_embedding: doc.query_embedding }
-        : null;
+        .orderBy(desc(schema.searches.created_at))
+        .limit(1);
+      return rows[0] ?? null;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      console.error(`[search] hash lookup failed, legacy fallback detail=${redactPii(msg.slice(0, 200))}`);
-      try {
-        const doc = await reader
-          .collection<AppDoc>(Collections.searches)
-          .find(
-            { employer_id: hr.employerId, query_text: queryText, created_at: { $gt: new Date(since) } },
-            { projection: { created_at: 1 } },
-          )
-          .sort({ created_at: -1 })
-          .limit(1)
-          .next();
-        return doc
-          ? { id: String(doc._id), created_at: doc.created_at as Date, query_embedding: null }
-          : null;
-      } catch {
-        return null;
-      }
+      console.error(`[search] hash lookup failed detail=${redactPii(msg.slice(0, 200))}`);
+      return null;
     }
   };
 
-  const corpusUnchanged = async (createdAt: Date): Promise<boolean> => {
+  const corpusUnchanged = async (createdAt: string): Promise<boolean> => {
     try {
-      const doc = await reader
-        .collection<AppDoc>(Collections.candidates)
-        .find(
-          { visibility_status: "visible", updated_at: { $gt: createdAt } },
-          { projection: { _id: 1 } },
+      const rows = await db
+        .select({ id: schema.candidates.id })
+        .from(schema.candidates)
+        .where(
+          and(
+            eq(schema.candidates.visibility_status, "visible"),
+            gt(schema.candidates.updated_at, createdAt),
+          ),
         )
-        .limit(1)
-        .next();
-      return !doc;
+        .limit(1);
+      return !rows[0];
     } catch {
       return false;
     }
@@ -332,34 +333,37 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
 
   const loadCachedMatches = async (searchId: string): Promise<Record<string, unknown>[] | null> => {
     try {
-      const mrows = await reader
-        .collection<AppDoc>(Collections.candidateMatches)
-        .find(
-          { search_id: searchId },
-          { projection: { candidate_id: 1, score: 1, match_reasons_json: 1 } },
-        )
-        .sort({ score: -1 })
-        .limit(limit)
-        .toArray();
+      const mrows = await db
+        .select({
+          candidate_id: schema.candidateMatches.candidate_id,
+          score: schema.candidateMatches.score,
+          match_reasons_json: schema.candidateMatches.match_reasons_json,
+        })
+        .from(schema.candidateMatches)
+        .where(eq(schema.candidateMatches.search_id, searchId))
+        .orderBy(desc(schema.candidateMatches.score))
+        .limit(limit);
       if (!mrows.length) return null;
-      const candIds = [...new Set(mrows.map((m) => String(m.candidate_id ?? "")).filter(Boolean))];
+      const candIds = [...new Set(mrows.map((m) => m.candidate_id).filter(Boolean))];
       const candDocs = candIds.length
-        ? await reader
-            .collection<AppDoc>(Collections.candidates)
-            .find(
-              { _id: { $in: candIds }, visibility_status: "visible" },
-              { projection: projection(CAND_COLS_BASE) },
+        ? await db
+            .select()
+            .from(schema.candidates)
+            .where(
+              and(
+                inArray(schema.candidates.id, candIds),
+                eq(schema.candidates.visibility_status, "visible"),
+              ),
             )
-            .toArray()
         : [];
-      const byId = new Map(candDocs.map((c) => [String(c._id), c]));
+      const byId = new Map(candDocs.map((c) => [c.id, c]));
       return mrows.map((m) => {
-        const c = byId.get(String(m.candidate_id ?? ""));
+        const c = byId.get(m.candidate_id);
         return {
           candidate_id: m.candidate_id,
           score: m.score,
           match_reasons_json: m.match_reasons_json,
-          candidates: c ? toRow(c) : null,
+          candidates: c ? { ...c, id: c.id } : null,
         } as unknown as Record<string, unknown>;
       });
     } catch (e) {
@@ -370,9 +374,6 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
   };
 
   const recent = await findRecentSearch();
-  let reusedEmbedding: number[] | null = null;
-  if (recent?.query_embedding) reusedEmbedding = parseStoredEmbedding(recent.query_embedding);
-
   if (recent?.id && (await corpusUnchanged(recent.created_at))) {
     const cached = await loadCachedMatches(recent.id);
     if (cached?.length) {
@@ -418,15 +419,15 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
     }
   }
 
-  type Chunk = { candidate_id: string; distance?: number; content_text?: string; chunk_type?: string; metadata_json?: unknown };
+  type Chunk = MatchChunksRow;
   let chunks: Chunk[] = [];
   let embedFailed = false;
-  let rpcFallback = false;
-  let qvec: number[] | null = reusedEmbedding;
+  let retrievalFallback = false;
+  let qvec: number[] | null = null;
   if (!qvec) {
     try {
       qvec = await embedQuery(queryText);
-      assertEmbeddingDim(qvec, EMBEDDING_DIM);
+      if (qvec.length !== EMBEDDING_DIM) throw new Error("embedding dim mismatch");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error(`[search] embed failed detail=${redactPii(msg.slice(0, 200))}`);
@@ -434,7 +435,7 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
       qvec = null;
     }
   }
-  wev.add({ embed_failed: embedFailed, embed_reused: reusedEmbedding != null });
+  wev.add({ embed_failed: embedFailed });
 
   if (qvec) {
     const ftsTerms = buildFtsTerms(jobReq, 20);
@@ -452,13 +453,13 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
       p_per_candidate: PER_CANDIDATE_CHUNKS,
     };
     try {
-      chunks = await matchChunks(reader, baseParams);
+      chunks = await matchChunks(baseParams);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      console.error(`[search] filtered rpc failed, fallback detail=${redactPii(msg.slice(0, 200))}`);
-      rpcFallback = true;
+      console.error(`[search] filtered retrieval failed, fallback detail=${redactPii(msg.slice(0, 200))}`);
+      retrievalFallback = true;
       try {
-        chunks = await matchChunks(reader, {
+        chunks = await matchChunks({
           ...baseParams,
           p_domain: null,
           p_min_exp: null,
@@ -468,7 +469,7 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
         });
       } catch (e2) {
         const msg2 = e2 instanceof Error ? e2.message : String(e2);
-        console.error(`[search] rpc fallback failed detail=${redactPii(msg2.slice(0, 200))}`);
+        console.error(`[search] retrieval fallback failed detail=${redactPii(msg2.slice(0, 200))}`);
       }
     }
   }
@@ -493,14 +494,40 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
     const ranked = [...byCand.entries()].sort((a, b) => a[1].best - b[1].best).slice(0, limit);
     const ids = ranked.map(([id]) => id);
     if (ids.length) {
-      const cands = await reader
-        .collection<AppDoc>(Collections.candidates)
-        .find(
-          { _id: { $in: ids }, visibility_status: "visible" },
-          { projection: projection(CAND_COLS_BASE) },
-        )
-        .toArray();
-      const byId = new Map(cands.map((c) => [String(c._id), toRow(c)]));
+      const cands = await db
+        .select({
+          id: schema.candidates.id,
+          full_name: schema.candidates.full_name,
+          headline: schema.candidates.headline,
+          domain: schema.candidates.domain,
+          total_experience_years: schema.candidates.total_experience_years,
+          min_salary: schema.candidates.min_salary,
+          salary_frequency: schema.candidates.salary_frequency,
+          linkedin_url: schema.candidates.linkedin_url,
+          github_url: schema.candidates.github_url,
+          portfolio_url: schema.candidates.portfolio_url,
+          resume_url: schema.candidates.resume_url,
+          photo_url: schema.candidates.photo_url,
+          profile_strength: schema.candidates.profile_strength,
+          remote_preference: schema.candidates.remote_preference,
+          location_city: schema.candidates.location_city,
+          availability_status: schema.candidates.availability_status,
+          show_email: schema.candidates.show_email,
+          show_phone: schema.candidates.show_phone,
+          show_linkedin: schema.candidates.show_linkedin,
+          show_github: schema.candidates.show_github,
+          show_portfolio: schema.candidates.show_portfolio,
+          show_resume: schema.candidates.show_resume,
+          show_photo: schema.candidates.show_photo,
+        })
+        .from(schema.candidates)
+        .where(
+          and(
+            inArray(schema.candidates.id, ids),
+            eq(schema.candidates.visibility_status, "visible"),
+          ),
+        );
+      const byId = new Map(cands.map((c) => [c.id, c]));
       const grouped: Record<string, unknown>[] = [];
       for (const [id, g] of ranked) {
         const c = byId.get(id);
@@ -522,55 +549,61 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
         chunkTechByCand.set(c.candidate_id, arr);
       }
       const [skillDocs, projDocs] = await Promise.all([
-        reader.collection<AppDoc>(Collections.candidateSkills)
-          .find({ candidate_id: { $in: scoreIds } }, { projection: { candidate_id: 1, skill_id: 1 } })
-          .toArray(),
-        reader.collection<AppDoc>(Collections.projects)
-          .find({ candidate_id: { $in: scoreIds } }, { projection: { candidate_id: 1, tech_stack: 1 } })
-          .toArray(),
+        db
+          .select({
+            candidate_id: schema.candidateSkills.candidate_id,
+            skill_id: schema.candidateSkills.skill_id,
+          })
+          .from(schema.candidateSkills)
+          .where(inArray(schema.candidateSkills.candidate_id, scoreIds)),
+        db
+          .select({
+            id: schema.projects.id,
+            candidate_id: schema.projects.candidate_id,
+            tech_stack: schema.projects.tech_stack,
+          })
+          .from(schema.projects)
+          .where(inArray(schema.projects.candidate_id, scoreIds)),
       ]);
-      const skillIds = [...new Set(skillDocs.map((s) => String(s.skill_id ?? "")).filter(Boolean))];
+      const skillIds = [...new Set(skillDocs.map((s) => s.skill_id).filter(Boolean))];
       const skillNameById = new Map<string, string>();
       if (skillIds.length) {
-        const skillRows = await reader
-          .collection<AppDoc>(Collections.skills)
-          .find({ _id: { $in: skillIds } }, { projection: { name: 1 } })
-          .toArray();
+        const skillRows = await db
+          .select({ id: schema.skills.id, name: schema.skills.name })
+          .from(schema.skills)
+          .where(inArray(schema.skills.id, skillIds));
         for (const s of skillRows) {
-          if (typeof s.name === "string" && s.name) skillNameById.set(String(s._id), s.name);
+          if (typeof s.name === "string" && s.name) skillNameById.set(s.id, s.name);
         }
       }
       const skillsByCand = new Map<string, string[]>();
       for (const s of skillDocs) {
-        const name = skillNameById.get(String(s.skill_id ?? ""));
+        const name = skillNameById.get(s.skill_id);
         if (!name) continue;
-        const cid = String(s.candidate_id ?? "");
-        if (!cid) continue;
-        const arr = skillsByCand.get(cid) ?? [];
+        const arr = skillsByCand.get(s.candidate_id) ?? [];
         arr.push(name);
-        skillsByCand.set(cid, arr);
+        skillsByCand.set(s.candidate_id, arr);
       }
       const projsByCand = new Map<string, { id: string; tech: string[] }[]>();
       for (const p of projDocs) {
-        const cid = String(p.candidate_id ?? "");
-        if (!cid) continue;
-        const arr = projsByCand.get(cid) ?? [];
-        arr.push({ id: String(p._id), tech: (p.tech_stack as string[] | null) ?? [] });
-        projsByCand.set(cid, arr);
+        const arr = projsByCand.get(p.candidate_id) ?? [];
+        arr.push({ id: p.id, tech: p.tech_stack ?? [] });
+        projsByCand.set(p.candidate_id, arr);
       }
       const allProjIds = [...projsByCand.values()].flat().map((p) => p.id);
       const depthByProj = new Map<string, { complexity: number; evidence: string }>();
       if (allProjIds.length) {
-        const depthRows = await reader
-          .collection<AppDoc>(Collections.projectDepthAnalysis)
-          .find(
-            { project_id: { $in: allProjIds } },
-            { projection: { project_id: 1, complexity_score: 1, evidence_quality: 1 } },
-          )
-          .toArray();
+        const depthRows = await db
+          .select({
+            project_id: schema.projectDepthAnalysis.project_id,
+            complexity_score: schema.projectDepthAnalysis.complexity_score,
+            evidence_quality: schema.projectDepthAnalysis.evidence_quality,
+          })
+          .from(schema.projectDepthAnalysis)
+          .where(inArray(schema.projectDepthAnalysis.project_id, allProjIds));
         for (const d of depthRows) {
-          if (d.project_id == null) continue;
-          depthByProj.set(String(d.project_id), {
+          if (!d.project_id) continue;
+          depthByProj.set(d.project_id, {
             complexity: typeof d.complexity_score === "number" ? d.complexity_score : 5,
             evidence: typeof d.evidence_quality === "string" ? d.evidence_quality : "moderate",
           });
@@ -617,83 +650,81 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
   }
   let unrankedFallback = false;
   if (!rows.length) {
-    const docs = await reader
-      .collection<AppDoc>(Collections.candidates)
-      .find({ visibility_status: "visible" }, { projection: projection(CAND_COLS_BASE) })
-      .sort({ created_at: -1 })
-      .limit(limit)
-      .toArray();
-    rows = docs.map(toRow);
+    const docs = await db
+      .select({
+        id: schema.candidates.id,
+        full_name: schema.candidates.full_name,
+        headline: schema.candidates.headline,
+        domain: schema.candidates.domain,
+        total_experience_years: schema.candidates.total_experience_years,
+        min_salary: schema.candidates.min_salary,
+        salary_frequency: schema.candidates.salary_frequency,
+        linkedin_url: schema.candidates.linkedin_url,
+        github_url: schema.candidates.github_url,
+        portfolio_url: schema.candidates.portfolio_url,
+        resume_url: schema.candidates.resume_url,
+        photo_url: schema.candidates.photo_url,
+        profile_strength: schema.candidates.profile_strength,
+        remote_preference: schema.candidates.remote_preference,
+        location_city: schema.candidates.location_city,
+        availability_status: schema.candidates.availability_status,
+        show_email: schema.candidates.show_email,
+        show_phone: schema.candidates.show_phone,
+        show_linkedin: schema.candidates.show_linkedin,
+        show_github: schema.candidates.show_github,
+        show_portfolio: schema.candidates.show_portfolio,
+        show_resume: schema.candidates.show_resume,
+        show_photo: schema.candidates.show_photo,
+      })
+      .from(schema.candidates)
+      .where(eq(schema.candidates.visibility_status, "visible"))
+      .orderBy(desc(schema.candidates.created_at))
+      .limit(limit);
+    rows = docs.map((c) => ({ ...c }));
     unrankedFallback = rows.length > 0;
   }
   wev.add({ result_count: rows.length, chunk_hits: chunks.length, unranked_fallback: unrankedFallback });
 
   let searchId: string | null = null;
-  const searchPayload: Record<string, unknown> = {
-    employer_id: hr.employerId,
-    query_text: queryText,
-    filters_json: jobReq,
-    result_count: rows.length,
-  };
   try {
-    const full: AppDoc = {
-      ...searchPayload,
-      _id: randomUUID(),
+    searchId = randomUUID();
+    await db.insert(schema.searches).values({
+      id: searchId,
+      employer_id: hr.employerId,
+      query_text: queryText,
       query_hash: qhash,
-      query_embedding: qvec ?? null,
-      created_at: new Date(),
-    };
-    const res = await reader.collection<AppDoc>(Collections.searches).insertOne(full);
-    searchId = String(res.insertedId);
+      filters_json: canonicalFilters(jobReq),
+      result_count: rows.length,
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.error(`[search] search insert with hash failed, legacy fallback detail=${redactPii(msg.slice(0, 200))}`);
-    try {
-      const res = await reader.collection<AppDoc>(Collections.searches).insertOne({
-        ...searchPayload,
-        _id: randomUUID(),
-        created_at: new Date(),
-      });
-      searchId = String(res.insertedId);
-    } catch {
-      searchId = null;
-    }
+    console.error(`[search] search insert failed detail=${redactPii(msg.slice(0, 200))}`);
+    searchId = null;
   }
 
   const saveMatches = async (entries: { candidate_id: string; score: number | null; reasons: Record<string, unknown> }[]): Promise<void> => {
     if (!searchId || !entries.length) return;
-    const payload: AppDoc[] = entries
+    const payload = entries
       .filter((m) => m.candidate_id)
       .map((m) => ({
-        _id: randomUUID(),
+        id: randomUUID(),
         search_id: searchId as string,
         candidate_id: m.candidate_id,
         score: m.score,
         match_reasons_json: m.reasons,
         status: "shown",
-        created_at: new Date(),
       }));
     if (!payload.length) return;
     try {
-      const matches = reader.collection<AppDoc>(Collections.candidateMatches);
-      await Promise.all(
-        payload.map((doc) =>
-          matches.updateOne(
-            { search_id: doc.search_id, candidate_id: doc.candidate_id },
-            { $setOnInsert: doc },
-            { upsert: true },
-          ),
-        ),
-      );
+      await db
+        .insert(schema.candidateMatches)
+        .values(payload)
+        .onConflictDoNothing({
+          target: [schema.candidateMatches.search_id, schema.candidateMatches.candidate_id],
+        });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      console.error(`[search] matches upsert failed, insert fallback detail=${redactPii(msg.slice(0, 200))}`);
-      try {
-        await reader.collection<AppDoc>(Collections.candidateMatches).insertMany(payload);
-      } catch (e2) {
-        const msg2 = e2 instanceof Error ? e2.message : String(e2);
-        console.error(`[search] matches insert failed detail=${redactPii(msg2.slice(0, 200))}`);
-      }
+      console.error(`[search] matches insert failed detail=${redactPii(msg.slice(0, 200))}`);
     }
   };
 
@@ -711,7 +742,7 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
     await attachProfileRows(rows);
     await attachContacts(rows);
     const results = finalize(rows);
-    const degradedOut = embedFailed || rpcFallback || unrankedFallback;
+    const degradedOut = embedFailed || retrievalFallback || unrankedFallback;
     wev.add({ degraded: degradedOut });
     return Response.json({ results, queryText, searchId, degraded: degradedOut || undefined });
   }
@@ -729,35 +760,52 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
     const topIds = top.map((r) => String(r.id ?? "")).filter((s): s is string => s.length > 0);
     const [judgeCands, judgeProjs] = await Promise.all([
       topIds.length
-        ? reader
-            .collection<AppDoc>(Collections.candidates)
-            .find(
-              { _id: { $in: topIds }, visibility_status: "visible" },
-              { projection: projection(JUDGE_CAND_COLS) },
+        ? db
+            .select({
+              id: schema.candidates.id,
+              full_name: schema.candidates.full_name,
+              headline: schema.candidates.headline,
+              domain: schema.candidates.domain,
+              total_experience_years: schema.candidates.total_experience_years,
+              min_salary: schema.candidates.min_salary,
+              location_city: schema.candidates.location_city,
+              remote_preference: schema.candidates.remote_preference,
+              availability_status: schema.candidates.availability_status,
+            })
+            .from(schema.candidates)
+            .where(
+              and(
+                inArray(schema.candidates.id, topIds),
+                eq(schema.candidates.visibility_status, "visible"),
+              ),
             )
-            .toArray()
-        : Promise.resolve([] as AppDoc[]),
+        : Promise.resolve([] as Record<string, unknown>[]),
       topIds.length
-        ? reader
-            .collection<AppDoc>(Collections.projects)
-            .find(
-              { candidate_id: { $in: topIds } },
-              { projection: { candidate_id: 1, title: 1, description: 1, tech_stack: 1, impact_summary: 1 } },
-            )
-            .toArray()
-        : Promise.resolve([] as AppDoc[]),
+        ? db
+            .select({
+              id: schema.projects.id,
+              candidate_id: schema.projects.candidate_id,
+              title: schema.projects.title,
+              description: schema.projects.description,
+              tech_stack: schema.projects.tech_stack,
+              impact_summary: schema.projects.impact_summary,
+            })
+            .from(schema.projects)
+            .where(inArray(schema.projects.candidate_id, topIds))
+        : Promise.resolve([] as Record<string, unknown>[]),
     ]);
-    const candById = new Map(judgeCands.map((c) => [String(c._id), toRow(c)]));
+    const candById = new Map(
+      (judgeCands as unknown as Record<string, unknown>[]).map((c) => [String(c.id), c]),
+    );
     const projsById = new Map<string, Record<string, unknown>[]>();
-    for (const p of judgeProjs) {
+    for (const p of judgeProjs as unknown as Record<string, unknown>[]) {
       const cid = String(p.candidate_id ?? "");
       if (!cid) continue;
       const bucket = projsById.get(cid) ?? [];
       if (bucket.length < MAX_PROJECTS_DEEP) {
-        // Rest-sibling strip: judge payloads must not carry the Mongo _id.
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const { _id, ...rest } = p;
-        bucket.push(rest as Record<string, unknown>);
+        const rest = { ...p };
+        delete rest.candidate_id;
+        bucket.push(rest);
       }
       projsById.set(cid, bucket);
     }
@@ -796,11 +844,11 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
         }),
       );
     }
-    wev.add({ judged: merged.length, deep: true, degraded: embedFailed || rpcFallback || judgeNulls === merged.length });
+    wev.add({ judged: merged.length, deep: true, degraded: embedFailed || retrievalFallback || judgeNulls === merged.length });
     await attachProfileRows(merged);
     await attachContacts(merged);
     const results = finalize(merged);
-    return Response.json({ results, queryText, searchId, deep: true, degraded: (embedFailed || rpcFallback || (merged.length > 0 && judgeNulls === merged.length)) || undefined });
+    return Response.json({ results, queryText, searchId, deep: true, degraded: (embedFailed || retrievalFallback || (merged.length > 0 && judgeNulls === merged.length)) || undefined });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error(`[search] deep judge failed detail=${redactPii(msg.slice(0, 200))}`);

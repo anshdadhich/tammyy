@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { createHash, randomUUID } from "node:crypto";
 import { after } from "next/server";
-import type { Db, Filter } from "mongodb";
-import { AppDoc, col, Collections } from "@/lib/mongo";
+import { and, desc, eq, gte, isNull, lt, or, type SQL } from "drizzle-orm";
+import { getDb, schema } from "@/db/client";
 import { contactLoggedEmail, sendEmail } from "@/lib/email";
 import { requireHrDb, requireOwnerDb, getSessionUser } from "@/lib/auth-user";
 import { rateLimit, rateLimitRoute } from "@/lib/rate-limit";
@@ -29,43 +29,21 @@ const listQuery = z.object({
 
 const AUDIT_ACTIONS = ["search", "profile_view", "contact", "shortlist", "export", "profile_update", "upload"] as const;
 
-/** `contact_log` row (Postgres columns kept verbatim, `_id` = former `id`). */
-type ContactLogDoc = {
-  _id: string;
+type ContactLogRow = {
+  id: string;
   employer_id: string | null;
   candidate_id: string | null;
   job_id: string | null;
   channel: string;
   message: string | null;
-  created_at: Date | string;
+  created_at: string;
 };
-
-type JobDoc = { _id: string; employer_id: string | null; title?: string | null };
-
-type CandidateDoc = {
-  _id: string;
-  full_name?: string | null;
-  contact_email?: string | null;
-};
-
-const CONTACT_PROJECTION = {
-  employer_id: 1,
-  candidate_id: 1,
-  job_id: 1,
-  channel: 1,
-  message: 1,
-  created_at: 1,
-} as const;
 
 type WideEvent = ReturnType<typeof startWideEvent>;
 
-function isoOf(v: Date | string): string {
-  return v instanceof Date ? v.toISOString() : new Date(v).toISOString();
-}
-
-function serializeContactLog(r: ContactLogDoc): Record<string, unknown> {
+function serializeContactLog(r: ContactLogRow): Record<string, unknown> {
   return {
-    id: r._id,
+    id: r.id,
     employer_id: r.employer_id ?? null,
     candidate_id: r.candidate_id ?? null,
     job_id: r.job_id ?? null,
@@ -84,44 +62,60 @@ async function auditBestEffort(
 ): Promise<void> {
   if (!(AUDIT_ACTIONS as readonly string[]).includes(row.action)) return;
   try {
-    const auditLogs = await col<AppDoc>(Collections.auditLogs);
-    await auditLogs.insertOne({ _id: randomUUID(), ...row, created_at: new Date() });
+    const db = await getDb();
+    await db.insert(schema.auditLogs).values({
+      id: randomUUID(),
+      action: row.action,
+      target_type: row.target_type,
+      target_id: row.target_id,
+      metadata_json: row.metadata,
+    });
   } catch {}
 }
 
 type ListOutcome =
-  | { kind: "ok"; rows: ContactLogDoc[] }
+  | { kind: "ok"; rows: ContactLogRow[] }
   | { kind: "invalid-cursor" }
   | { kind: "failed" };
 
 /** Shared list query for the owner and HR branches of GET. */
 async function runContactList(
-  db: Db,
-  filter: Filter<ContactLogDoc>,
+  base: SQL[],
   page: { cursor?: string | undefined; offset?: number | undefined },
   pageSize: number,
 ): Promise<ListOutcome> {
+  const conds = [...base];
   if (page.cursor) {
     const c = decodeCursor(page.cursor);
     if (!c) return { kind: "invalid-cursor" };
-    filter.$or = [
-      { created_at: { $lt: new Date(c.createdAt) } },
-      { created_at: new Date(c.createdAt), _id: { $lt: c.id } },
-    ];
+    conds.push(
+      or(
+        lt(schema.contactLog.created_at, c.createdAt),
+        and(
+          eq(schema.contactLog.created_at, c.createdAt),
+          lt(schema.contactLog.id, c.id),
+        ),
+      )!,
+    );
   }
   try {
-    const contactLog = db.collection<ContactLogDoc>(Collections.contactLog);
-    let q = contactLog
-      .find(filter, { projection: CONTACT_PROJECTION })
-      .sort({ created_at: -1, _id: -1 });
-    if (page.cursor) {
-      q = q.limit(pageSize + 1);
-    } else if (page.offset !== undefined) {
-      q = q.skip(page.offset).limit(pageSize + 1);
-    } else {
-      q = q.limit(pageSize + 1);
-    }
-    return { kind: "ok", rows: await q.toArray() };
+    const db = await getDb();
+    const rows = await db
+      .select({
+        id: schema.contactLog.id,
+        employer_id: schema.contactLog.employer_id,
+        candidate_id: schema.contactLog.candidate_id,
+        job_id: schema.contactLog.job_id,
+        channel: schema.contactLog.channel,
+        message: schema.contactLog.message,
+        created_at: schema.contactLog.created_at,
+      })
+      .from(schema.contactLog)
+      .where(and(...conds))
+      .orderBy(desc(schema.contactLog.created_at), desc(schema.contactLog.id))
+      .offset(page.offset ?? 0)
+      .limit(pageSize + 1);
+    return { kind: "ok", rows };
   } catch {
     return { kind: "failed" };
   }
@@ -129,13 +123,13 @@ async function runContactList(
 
 function respondContactList(
   wev: WideEvent,
-  rows: ContactLogDoc[],
+  rows: ContactLogRow[],
   pageSize: number,
 ): Response {
   const page = rows.slice(0, pageSize);
   const nextCursor =
     rows.length > pageSize
-      ? encodeCursor(isoOf(rows[pageSize - 1].created_at), rows[pageSize - 1]._id)
+      ? encodeCursor(rows[pageSize - 1].created_at, rows[pageSize - 1].id)
       : null;
   wev.add({ degraded: false });
   wev.end({ status: 200 });
@@ -157,7 +151,7 @@ function invalidCursor(wev: WideEvent): Response {
 export async function POST(request: Request) {
   const wev = startWideEvent("contacts", "POST");
   const session = await getSessionUser();
-  const limited = rateLimitRoute(request, {
+  const limited = await rateLimitRoute(request, {
     key: "contacts-post",
     limit: 20,
     windowMs: 10 * 60_000,
@@ -186,7 +180,7 @@ export async function POST(request: Request) {
   const employerId = hr.employerId;
   const { candidate_id, job_id, channel, message } = parsed.data;
 
-  const perTarget = rateLimit(request, {
+  const perTarget = await rateLimit(request, {
     key: `contacts-post-target:${candidate_id}`,
     limit: 5,
     windowMs: 10 * 60_000,
@@ -204,56 +198,66 @@ export async function POST(request: Request) {
   }
 
   // Existence checks; a read failure falls into the same branches the old
-  // `.maybeSingle()` error→null paths took.
-  let candRow: { _id: string } | null = null;
-  let jobRow: JobDoc | null = null;
+  // error→null paths took.
+  let candRow: { id: string } | undefined;
+  let jobRow: { id: string; employer_id: string | null } | undefined;
   try {
-    const candidates = await col<{ _id: string }>(Collections.candidates);
-    const jobs = await col<JobDoc>(Collections.jobs);
-    [candRow, jobRow] = await Promise.all([
-      candidates.findOne({ _id: candidate_id }, { projection: { _id: 1 } }),
-      job_id
-        ? jobs.findOne({ _id: job_id }, { projection: { employer_id: 1 } })
-        : Promise.resolve(null),
-    ]);
+    const db = await getDb();
+    [candRow] = await db
+      .select({ id: schema.candidates.id })
+      .from(schema.candidates)
+      .where(eq(schema.candidates.id, candidate_id))
+      .limit(1);
+    if (job_id) {
+      [jobRow] = await db
+        .select({ id: schema.jobs.id, employer_id: schema.jobs.employer_id })
+        .from(schema.jobs)
+        .where(eq(schema.jobs.id, job_id))
+        .limit(1);
+    }
   } catch {
-    candRow = null;
-    jobRow = null;
+    candRow = undefined;
+    jobRow = undefined;
   }
   if (!candRow) {
     wev.end({ status: 404 });
     return Response.json({ error: "candidate not found" }, { status: 404 });
   }
   if (job_id) {
-    const job = jobRow;
-    if (!job) {
+    if (!jobRow) {
       wev.end({ status: 404 });
       return Response.json({ error: "job not found" }, { status: 404 });
     }
-    if (job.employer_id !== employerId) {
+    if (jobRow.employer_id !== employerId) {
       wev.end({ status: 403 });
       return Response.json({ error: "Job does not belong to your organization." }, { status: 403 });
     }
   }
 
   // Idempotency window: recent identical messages dedupe to the old row.
-  const windowStart = new Date(Date.now() - IDEMPOTENCY_WINDOW_MS);
-  let recent: ContactLogDoc[] = [];
+  const windowStart = new Date(Date.now() - IDEMPOTENCY_WINDOW_MS).toISOString();
+  let recent: { id: string; channel: string; message: string | null }[] = [];
   try {
-    const contactLog = await col<ContactLogDoc>(Collections.contactLog);
-    recent = await contactLog
-      .find(
-        {
-          employer_id: employerId,
-          candidate_id,
-          job_id: job_id ?? null,
-          created_at: { $gte: windowStart },
-        },
-        { projection: { channel: 1, message: 1, job_id: 1, created_at: 1 } },
+    const db = await getDb();
+    recent = await db
+      .select({
+        id: schema.contactLog.id,
+        channel: schema.contactLog.channel,
+        message: schema.contactLog.message,
+      })
+      .from(schema.contactLog)
+      .where(
+        and(
+          eq(schema.contactLog.employer_id, employerId),
+          eq(schema.contactLog.candidate_id, candidate_id),
+          job_id
+            ? eq(schema.contactLog.job_id, job_id)
+            : isNull(schema.contactLog.job_id),
+          gte(schema.contactLog.created_at, windowStart),
+        ),
       )
-      .sort({ created_at: -1 })
-      .limit(20)
-      .toArray();
+      .orderBy(desc(schema.contactLog.created_at))
+      .limit(20);
   } catch {
     recent = [];
   }
@@ -262,22 +266,22 @@ export async function POST(request: Request) {
   if (dupe) {
     wev.add({ degraded: false });
     wev.end({ status: 200 });
-    return Response.json({ id: dupe._id, status: "logged", deduped: true });
+    return Response.json({ id: dupe.id, status: "logged", deduped: true });
   }
 
   let contactId: string | null = null;
   try {
-    const contactLog = await col<ContactLogDoc>(Collections.contactLog);
-    const res = await contactLog.insertOne({
-      _id: randomUUID(),
+    const db = await getDb();
+    contactId = randomUUID();
+    await db.insert(schema.contactLog).values({
+      id: contactId,
       employer_id: employerId,
       candidate_id,
       job_id: job_id ?? null,
       channel,
       message: message || null,
-      created_at: new Date(),
+      message_hash: incoming,
     });
-    contactId = res.insertedId;
   } catch {
     contactId = null;
   }
@@ -301,31 +305,32 @@ export async function POST(request: Request) {
   after(async () => {
     const bg = startWideEvent("contacts", "POST-email");
     try {
-      const candidates = await col<CandidateDoc>(Collections.candidates);
-      const jobs = await col<JobDoc>(Collections.jobs);
-      const [cc, jj] = await Promise.all([
-        candidates.findOne(
-          { _id: candidate_id },
-          { projection: { full_name: 1, contact_email: 1 } },
-        ),
-        job_id
-          ? jobs.findOne({ _id: job_id }, { projection: { title: 1, employer_id: 1 } })
-          : Promise.resolve(null),
-      ]);
+      const db = await getDb();
+      const [cc] = await db
+        .select({
+          full_name: schema.candidates.full_name,
+          contact_email: schema.candidates.contact_email,
+        })
+        .from(schema.candidates)
+        .where(eq(schema.candidates.id, candidate_id))
+        .limit(1);
       let jobTitle: string | null = null;
       let company: string | null = null;
-      if (job_id && jj) {
-        // Former join `employers(company_name)` → second query on employer_id.
-        jobTitle = jj.title ?? null;
-        if (jj.employer_id) {
-          const employers = await col<{ _id: string; company_name?: string | null }>(
-            Collections.employers,
-          );
-          const ee = await employers.findOne(
-            { _id: jj.employer_id },
-            { projection: { company_name: 1 } },
-          );
-          company = ee?.company_name ?? null;
+      if (job_id) {
+        const jj = await db
+          .select({ title: schema.jobs.title, employer_id: schema.jobs.employer_id })
+          .from(schema.jobs)
+          .where(eq(schema.jobs.id, job_id))
+          .limit(1);
+        jobTitle = jj[0]?.title ?? null;
+        const eid = jj[0]?.employer_id;
+        if (eid) {
+          const ee = await db
+            .select({ company_name: schema.employers.company_name })
+            .from(schema.employers)
+            .where(eq(schema.employers.id, eid))
+            .limit(1);
+          company = ee[0]?.company_name ?? null;
         }
       }
       if (!cc?.contact_email) {
@@ -363,7 +368,7 @@ export async function POST(request: Request) {
 export async function GET(request: Request) {
   const wev = startWideEvent("contacts", "GET");
   const session = await getSessionUser();
-  const limited = rateLimitRoute(request, {
+  const limited = await rateLimitRoute(request, {
     key: "contacts-get",
     limit: 60,
     windowMs: 60_000,
@@ -411,8 +416,7 @@ export async function GET(request: Request) {
       return Response.json({ error: "You can only view your own contact logs." }, { status: 403 });
     }
     const outcome = await runContactList(
-      owned.client,
-      { candidate_id },
+      [eq(schema.contactLog.candidate_id, candidate_id)],
       parsed.data,
       pageSize,
     );
@@ -426,8 +430,10 @@ export async function GET(request: Request) {
     return hr;
   }
   const outcome = await runContactList(
-    hr.client,
-    { candidate_id, employer_id: hr.employerId },
+    [
+      eq(schema.contactLog.candidate_id, candidate_id),
+      eq(schema.contactLog.employer_id, hr.employerId),
+    ],
     parsed.data,
     pageSize,
   );

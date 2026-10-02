@@ -1,23 +1,20 @@
+import { eq } from "drizzle-orm";
 import { z } from "zod";
+import { getDb, schema } from "@/db/client";
 import { readJsonBody } from "@/lib/http";
 import { clientIp, rateLimit, rateLimitResponse } from "@/lib/rate-limit";
-import { hashPassword, verifyPassword } from "@/lib/password";
-import { AppDoc, col, Collections } from "@/lib/mongo";
+import { hashPasswordRemote, verifyPasswordRemote } from "@/lib/password";
 import { createSession, setSessionCookie } from "@/lib/session";
-import {
-  authLoginPayload,
-  ensureAuthIndexes,
-  loadSessionUserById,
-} from "@/lib/auth-user";
+import { authLoginPayload, loadSessionUserById } from "@/lib/auth-user";
 import { normalizeEmail } from "@/lib/validators";
 
 /**
  * POST /api/auth/login — email + password sign-in.
  *
  * Order: rate limit (IP + email principal) → validate body → find user →
- * verify password (dummy scrypt verify when there is no stored hash, so
- * unknown emails and passwordless rows cost the same) → generic 401 →
- * suspended check → candidate-owned check → create session.
+ * verify password (dummy verify when there is no stored hash, so unknown
+ * emails and passwordless rows cost the same) → generic 401 → suspended
+ * check → candidate-owned check → create session.
  *
  * A candidate-profile-owned email never gets a hire-side session (403);
  * candidates sign in through the join wizard's claim step instead.
@@ -34,13 +31,13 @@ const OWNER_403 = "This email owns a candidate profile. Use a different email fo
 let dummyHashPromise: Promise<string | null> | null = null;
 function dummyStoredHash(): Promise<string | null> {
   if (!dummyHashPromise) {
-    dummyHashPromise = hashPassword("tammy-timing-equalizer").catch(() => null);
+    dummyHashPromise = hashPasswordRemote("tammy-timing-equalizer").catch(() => null);
   }
   return dummyHashPromise;
 }
 
 export async function POST(request: Request): Promise<Response> {
-  const ipLimit = rateLimit(request, {
+  const ipLimit = await rateLimit(request, {
     key: "auth-login",
     limit: 15,
     windowMs: 10 * 60_000,
@@ -61,7 +58,7 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: "Enter a valid email and password." }, { status: 400 });
   }
 
-  const emailLimit = rateLimit(request, {
+  const emailLimit = await rateLimit(request, {
     key: "auth-login-email",
     limit: 15,
     windowMs: 10 * 60_000,
@@ -69,33 +66,29 @@ export async function POST(request: Request): Promise<Response> {
   });
   if (!emailLimit.ok) return rateLimitResponse(emailLimit.retryAfterMs);
 
-  await ensureAuthIndexes();
-
-  const users = await col<AppDoc>(Collections.users);
-  let raw: AppDoc | null;
+  const db = await getDb();
+  let raw: typeof schema.users.$inferSelect | undefined;
   try {
-    raw = await users.findOne({ email });
+    const rows = await db.select().from(schema.users).where(eq(schema.users.email, email)).limit(1);
+    raw = rows[0];
   } catch (e) {
     console.error("[auth/login] lookup failed", e instanceof Error ? e.message : e);
     return Response.json({ error: "Could not sign in. Try again." }, { status: 503 });
   }
 
   // Equalize work for unknown emails / passwordless rows with a real verify.
-  const stored =
-    raw && typeof raw.password_hash === "string" && raw.password_hash
-      ? raw.password_hash
-      : await dummyStoredHash();
-  const ok = await verifyPassword(parsed.data.password, stored);
+  const stored = raw && raw.password_hash ? raw.password_hash : await dummyStoredHash();
+  const ok = stored ? await verifyPasswordRemote(parsed.data.password, stored) : false;
   if (!raw || !ok) {
     return Response.json({ error: GENERIC_401 }, { status: 401 });
   }
-  if (typeof raw.status === "string" && raw.status !== "active") {
+  if (raw.status !== "active") {
     return Response.json({ error: "Account suspended." }, { status: 403 });
   }
 
   let session;
   try {
-    session = await loadSessionUserById(String(raw._id));
+    session = await loadSessionUserById(raw.id);
   } catch (e) {
     console.error("[auth/login] session load failed", e instanceof Error ? e.message : e);
     return Response.json({ error: "Could not sign in. Try again." }, { status: 503 });

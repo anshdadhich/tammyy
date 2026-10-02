@@ -1,24 +1,26 @@
 import { randomUUID } from "crypto";
+import { eq } from "drizzle-orm";
+import { getDb, schema } from "@/db/client";
 import { getSessionUser, requireHrDb, requireOwnerDb } from "@/lib/auth-user";
 import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { redactPii } from "@/lib/redact";
-import { AppDoc, col, Collections } from "@/lib/mongo";
 import {
   deleteObject,
-  getObject,
+  getObjectRange,
   isDuplicateObject,
-  objectUrl,
+  isObjectPath,
+  objectHead,
+  presignDownload,
+  presignUpload,
   putObject,
+  UPLOAD_PRESIGN_EXPIRES_IN,
 } from "@/lib/storage";
 
-export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const MAX_BYTES = 10 * 1024 * 1024;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const PATH_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[A-Za-z0-9._-]{1,200}$/;
 
 const KIND_BUCKET = {
   resume: "resumes",
@@ -63,12 +65,7 @@ function sanitizeFilename(name: string): string {
 }
 
 function hasActivePdfContent(bytes: Uint8Array): boolean {
-  let text = "";
-  try {
-    text = Buffer.from(bytes).toString("latin1");
-  } catch {
-    return false;
-  }
+  const text = new TextDecoder("latin1").decode(bytes);
   const patterns = [
     "/JavaScript", "/JS", "/Launch", "/EmbeddedFile", "/EmbeddedFiles",
     "/AA", "/OpenAction", "/XFA", "/RichMedia", "/ObjStm",
@@ -84,7 +81,9 @@ function hasActivePdfContent(bytes: Uint8Array): boolean {
 function sniffFile(ext: string, bytes: Uint8Array): { ok: boolean; reason?: string } {
   if (bytes.length < 8) return { ok: false, reason: "file too small" };
   const head = bytes;
-  const asciiStart = Buffer.from(bytes.slice(0, 512)).toString("latin1").toLowerCase();
+  const asciiStart = new TextDecoder("latin1")
+    .decode(bytes.slice(0, 512))
+    .toLowerCase();
   if (asciiStart.includes("<svg") || asciiStart.includes("<?xml")) {
     return { ok: false, reason: "SVG content is not allowed" };
   }
@@ -115,9 +114,151 @@ function sniffFile(ext: string, bytes: Uint8Array): { ok: boolean; reason?: stri
   return { ok: false, reason: "unsupported extension" };
 }
 
+/**
+ * Photo uploads go browser → R2 on a presigned PUT (zero Worker CPU, zero
+ * egress), then POST { mode: "finalize" } verifies the stored object's
+ * magic bytes and attaches it to the profile. Resume/portfolio downloads
+ * keep the auth-checked same-origin route, and also offer presigned GETs
+ * when R2 S3 credentials are configured.
+ */
 export async function POST(request: Request) {
-  const rl = rateLimit(request, { key: "uploads-post", limit: 20, windowMs: 10 * 60_000 });
+  const rl = await rateLimit(request, { key: "uploads-post", limit: 20, windowMs: 10 * 60_000 });
   if (!rl.ok) return rateLimitResponse(rl.retryAfterMs);
+
+  const ct = request.headers.get("content-type") ?? "";
+  if (ct.toLowerCase().includes("application/json")) {
+    return handleJsonUpload(request);
+  }
+  return handleProxyUpload(request);
+}
+
+async function handleJsonUpload(request: Request): Promise<Response> {
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return err("invalid JSON body");
+  }
+  const b = (body ?? {}) as Record<string, unknown>;
+  const mode = typeof b.mode === "string" ? b.mode : "request-upload";
+  const kind = typeof b.kind === "string" ? b.kind : "";
+  const candidateId = typeof b.candidate_id === "string" ? b.candidate_id.trim() : "";
+
+  if (kind !== "resume" && kind !== "photo" && kind !== "portfolio") {
+    return err('kind must be "resume", "photo", or "portfolio"');
+  }
+  if (!UUID_RE.test(candidateId)) {
+    return err("candidate_id must be a valid uuid");
+  }
+
+  const session = await getSessionUser();
+  const viewer = session?.viewer ?? { kind: "anon" as const };
+  if (viewer.kind === "anon") return err("Sign in to upload files.", 401);
+  if (viewer.kind === "hr") return err("Employers cannot upload profile files.", 403);
+  const gate = await requireOwnerDb(candidateId, session);
+  if (gate instanceof Response) return err("You can only upload files to your own profile.", gate.status);
+
+  const db = await getDb();
+  const candRows = await db
+    .select({ id: schema.candidates.id })
+    .from(schema.candidates)
+    .where(eq(schema.candidates.id, candidateId))
+    .limit(1);
+  if (!candRows[0]) return err("candidate not found", 404);
+
+  const filename =
+    typeof b.filename === "string" && b.filename.trim()
+      ? sanitizeFilename(b.filename.trim())
+      : "upload";
+  const ext = (filename.split(".").pop() ?? "").toLowerCase();
+  if (!KIND_EXT[kind].includes(ext)) {
+    return err(`invalid extension for ${kind}: expected ${KIND_EXT[kind].join(" / ")}`);
+  }
+  const size = Number(b.size ?? 0);
+  if (!Number.isFinite(size) || size <= 0 || size > MAX_BYTES) {
+    return err(`file size must be between 1 byte and ${(MAX_BYTES / 1024 / 1024).toFixed(0)}MB`);
+  }
+  const contentType = FIXED_CONTENT_TYPE[ext] ?? "application/octet-stream";
+  const bucket = KIND_BUCKET[kind];
+  const path = `${candidateId}/${Date.now()}-${filename}`;
+
+  if (mode === "finalize") {
+    const head = await objectHead(bucket, path);
+    if (!head) return err("uploaded file not found", 404);
+    if (head.size > MAX_BYTES) {
+      await deleteObject(bucket, path);
+      return err("file too large: exceeds 10MB");
+    }
+    const headBytes = await getObjectRange(bucket, path, { offset: 0, length: 512 });
+    const tailBytes =
+      ext === "jpg" || ext === "jpeg"
+        ? await getObjectRange(bucket, path, { suffix: 2 })
+        : null;
+    const probe = new Uint8Array((headBytes?.length ?? 0) + (tailBytes?.length ?? 0));
+    if (headBytes) probe.set(headBytes, 0);
+    if (tailBytes) probe.set(tailBytes, headBytes?.length ?? 0);
+    const sniffed = sniffFile(ext, probe);
+    if (!sniffed.ok) {
+      await deleteObject(bucket, path);
+      return err(sniffed.reason ?? "file content rejected");
+    }
+    await attachToProfile(candidateId, kind, path, db);
+    return Response.json(
+      { bucket, path, signedUrl: downloadUrl(bucket, path), expiresIn: 0 },
+      { status: 201 },
+    );
+  }
+
+  const uploadUrl = await presignUpload(bucket, path);
+  if (uploadUrl) {
+    return Response.json(
+      {
+        mode: "presigned",
+        bucket,
+        path,
+        uploadUrl,
+        method: "PUT",
+        headers: { "content-type": contentType },
+        expiresInSeconds: UPLOAD_PRESIGN_EXPIRES_IN,
+      },
+      { status: 201 },
+    );
+  }
+
+  // No R2 S3 credentials configured — fall back to a Worker-mediated PUT
+  // so local dev keeps working (the direct-to-R2 path is the prod one).
+  return Response.json(
+    {
+      mode: "direct",
+      bucket,
+      path,
+      uploadUrl: `/api/uploads?bucket=${encodeURIComponent(bucket)}&path=${encodeURIComponent(path)}`,
+      method: "PUT",
+      headers: { "content-type": contentType },
+      expiresInSeconds: 0,
+    },
+    { status: 201 },
+  );
+}
+
+async function attachToProfile(
+  candidateId: string,
+  kind: Kind,
+  path: string,
+  db: Awaited<ReturnType<typeof getDb>>,
+): Promise<void> {
+  const column = KIND_COLUMN[kind];
+  await db
+    .update(schema.candidates)
+    .set({ [column]: path, updated_at: new Date().toISOString() })
+    .where(eq(schema.candidates.id, candidateId));
+}
+
+function downloadUrl(bucket: string, path: string): string {
+  return `/api/uploads?bucket=${encodeURIComponent(bucket)}&path=${encodeURIComponent(path)}`;
+}
+
+async function handleProxyUpload(request: Request): Promise<Response> {
   const clRaw = request.headers.get("content-length");
   if (clRaw !== null) {
     const cl = Number(clRaw);
@@ -125,6 +266,14 @@ export async function POST(request: Request) {
       return err("file too large: exceeds 10MB");
     }
   }
+  const url = new URL(request.url);
+  const putBucket = url.searchParams.get("bucket") ?? "";
+  const putPath = url.searchParams.get("path") ?? "";
+
+  if (request.method === "PUT" && putBucket && putPath) {
+    return handleDirectPut(request, putBucket, putPath);
+  }
+
   let form: FormData;
   try {
     form = await request.formData();
@@ -133,7 +282,7 @@ export async function POST(request: Request) {
   }
 
   const session = await getSessionUser();
-  const viewer = session?.viewer ?? { kind: "anon" };
+  const viewer = session?.viewer ?? { kind: "anon" as const };
   const kindRaw = form.get("kind");
   const candidateIdRaw = form.get("candidate_id");
   const file = form.get("file");
@@ -187,9 +336,13 @@ export async function POST(request: Request) {
   const bucket = KIND_BUCKET[kind];
   const path = `${candidateId}/${Date.now()}-${sanitizeFilename(file.name)}`;
 
-  const candidates = await col<AppDoc>(Collections.candidates);
-  const cand = await candidates.findOne({ _id: candidateId }, { projection: { _id: 1 } });
-  if (!cand) return err("candidate not found", 404);
+  const db = await getDb();
+  const candRows = await db
+    .select({ id: schema.candidates.id })
+    .from(schema.candidates)
+    .where(eq(schema.candidates.id, candidateId))
+    .limit(1);
+  if (!candRows[0]) return err("candidate not found", 404);
 
   try {
     await putObject(bucket, path, bytes);
@@ -200,10 +353,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    await candidates.updateOne(
-      { _id: candidateId },
-      { $set: { [KIND_COLUMN[kind]]: path, updated_at: new Date() } },
-    );
+    await attachToProfile(candidateId, kind, path, db);
   } catch {
     console.error("[uploads] profile link failed — removing orphan object", redactPii(bucket));
     try {
@@ -213,17 +363,45 @@ export async function POST(request: Request) {
     return err("upload failed to attach to profile", 500);
   }
 
-  // Local objects re-check session access on every GET request, so there is
-  // no signed expiry to hand out — signedUrl is the same-origin path that
-  // streams the file with auth enforced per request.
   return Response.json(
-    { bucket, path, signedUrl: objectUrl(bucket, path), expiresIn: 0 },
+    { bucket, path, signedUrl: downloadUrl(bucket, path), expiresIn: 0 },
     { status: 201 },
   );
 }
 
+async function handleDirectPut(
+  request: Request,
+  bucketRaw: string,
+  pathRaw: string,
+): Promise<Response> {
+  if (bucketRaw !== "resumes" && bucketRaw !== "photos" && bucketRaw !== "portfolios") {
+    return err("bucket must be resumes, photos, or portfolios");
+  }
+  if (!isObjectPath(pathRaw) || pathRaw.includes("..")) {
+    return err("path must be {candidate_uuid}/{filename}");
+  }
+  const folderId = pathRaw.split("/")[0] ?? "";
+  const session = await getSessionUser();
+  const viewer = session?.viewer ?? { kind: "anon" as const };
+  if (viewer.kind === "anon") return err("Sign in to upload files.", 401);
+  if (viewer.kind === "hr") return err("Employers cannot upload profile files.", 403);
+  const gate = await requireOwnerDb(folderId, session);
+  if (gate instanceof Response) return err("You can only upload files to your own profile.", gate.status);
+
+  const body = request.body;
+  if (!body) return err("empty upload body");
+  try {
+    await putObject(bucketRaw, pathRaw, body);
+  } catch (e) {
+    if (isDuplicateObject(e)) return err("upload failed", 409);
+    console.error("[uploads] direct put failed", redactPii(bucketRaw));
+    return err("upload failed", 500);
+  }
+  return Response.json({ bucket: bucketRaw, path: pathRaw }, { status: 201 });
+}
+
 export async function GET(request: Request) {
-  const rl = rateLimit(request, { key: "uploads-get", limit: 120, windowMs: 60_000 });
+  const rl = await rateLimit(request, { key: "uploads-get", limit: 120, windowMs: 60_000 });
   if (!rl.ok) return rateLimitResponse(rl.retryAfterMs);
   const url = new URL(request.url);
   const bucket = url.searchParams.get("bucket") ?? "";
@@ -236,12 +414,12 @@ export async function GET(request: Request) {
   ) {
     return err("bucket must be resumes, photos, or portfolios");
   }
-  if (!PATH_RE.test(path) || path.includes("..")) {
+  if (!isObjectPath(path) || path.includes("..")) {
     return err("path must be {candidate_uuid}/{filename}");
   }
 
   const session = await getSessionUser();
-  const viewer = session?.viewer ?? { kind: "anon" };
+  const viewer = session?.viewer ?? { kind: "anon" as const };
   const folderId = path.split("/")[0] ?? "";
   if (viewer.kind === "anon") {
     return err("Sign in to view files.", 401);
@@ -254,50 +432,28 @@ export async function GET(request: Request) {
   if (viewer.kind === "hr") {
     const hr = await requireHrDb(session);
     if (hr instanceof Response) return hr;
-    const showColumn = SHOW_COLUMN_BY_BUCKET[bucket];
-    const candidates = await col<AppDoc>(Collections.candidates);
-    const cand = await candidates.findOne(
-      { _id: folderId },
-      { projection: { visibility_status: 1, [showColumn]: 1 } },
-    );
+    const showColumn = SHOW_COLUMN_BY_BUCKET[bucket as keyof typeof SHOW_COLUMN_BY_BUCKET];
+    const db = await getDb();
+    const candRows = await db
+      .select({
+        visibility_status: schema.candidates.visibility_status,
+        show_resume: schema.candidates.show_resume,
+        show_portfolio: schema.candidates.show_portfolio,
+        show_photo: schema.candidates.show_photo,
+      })
+      .from(schema.candidates)
+      .where(eq(schema.candidates.id, folderId))
+      .limit(1);
+    const cand = candRows[0];
     if (
       !cand ||
-      (cand.visibility_status ?? "visible") !== "visible" ||
+      cand.visibility_status !== "visible" ||
       cand[showColumn] !== true
     ) {
       return err("candidate not found", 404);
     }
     try {
-      const shortlists = await col<AppDoc>(Collections.shortlists);
-      const matches = await col<AppDoc>(Collections.candidateMatches);
-      const contactLog = await col<AppDoc>(Collections.contactLog);
-      const [sl, mt, cl] = await Promise.all([
-        shortlists.findOne(
-          { candidate_id: folderId, employer_id: hr.employerId },
-          { projection: { _id: 1 } },
-        ),
-        matches
-          .find({ candidate_id: folderId }, { projection: { search_id: 1 } })
-          .limit(50)
-          .toArray(),
-        contactLog.findOne(
-          { candidate_id: folderId, employer_id: hr.employerId },
-          { projection: { _id: 1 } },
-        ),
-      ]);
-      const matchedSearchIds = mt
-        .map((m) => m.search_id)
-        .filter((v): v is string => typeof v === "string" && v.length > 0);
-      let matchedOwn = false;
-      if (matchedSearchIds.length) {
-        const searches = await col<AppDoc>(Collections.searches);
-        const own = await searches.findOne({
-          _id: { $in: matchedSearchIds },
-          employer_id: hr.employerId,
-        });
-        matchedOwn = own !== null;
-      }
-      const entitled = sl !== null || matchedOwn || cl !== null;
+      const entitled = await employerEntitled(db, folderId, hr.employerId);
       if (!entitled) {
         return err("no access to these files", 403);
       }
@@ -307,27 +463,84 @@ export async function GET(request: Request) {
   }
 
   try {
-    const auditLogs = await col<AppDoc>(Collections.auditLogs);
-    await auditLogs.insertOne({
-      _id: randomUUID(),
+    const db = await getDb();
+    await db.insert(schema.auditLogs).values({
+      id: randomUUID(),
       action: "file_view",
       target_type: bucket,
       target_id: folderId,
-      metadata: { path, bucket },
-      created_at: new Date(),
+      metadata_json: { path, bucket },
     });
   } catch {
   }
 
-  const buf = await getObject(bucket, path);
-  if (!buf) return err("file not found", 404);
+  const head = await objectHead(bucket, path);
+  if (!head) return err("file not found", 404);
+
+  const presigned = await presignDownload(bucket, path);
+  if (presigned) {
+    return Response.json({ signedUrl: presigned, expiresIn: 900 });
+  }
+
+  const bytes = await getObjectRange(bucket, path, { offset: 0, length: head.size });
+  if (!bytes) return err("file not found", 404);
   const downloadName = path.split("/").pop() ?? "download";
   const fileExt = (downloadName.split(".").pop() ?? "").toLowerCase();
-  return new Response(new Uint8Array(buf), {
+  return new Response(bytes as unknown as BodyInit, {
     headers: {
       "content-type": FIXED_CONTENT_TYPE[fileExt] ?? "application/octet-stream",
       "content-disposition": `inline; filename="${downloadName}"`,
       "cache-control": "private, max-age=300",
     },
   });
+}
+
+async function employerEntitled(
+  db: Awaited<ReturnType<typeof getDb>>,
+  candidateId: string,
+  employerId: string,
+): Promise<boolean> {
+  const { and, eq, inArray } = await import("drizzle-orm");
+  const sl = await db
+    .select({ id: schema.shortlists.id })
+    .from(schema.shortlists)
+    .where(
+      and(
+        eq(schema.shortlists.candidate_id, candidateId),
+        eq(schema.shortlists.employer_id, employerId),
+      ),
+    )
+    .limit(1);
+  if (sl[0]) return true;
+  const cl = await db
+    .select({ id: schema.contactLog.id })
+    .from(schema.contactLog)
+    .where(
+      and(
+        eq(schema.contactLog.candidate_id, candidateId),
+        eq(schema.contactLog.employer_id, employerId),
+      ),
+    )
+    .limit(1);
+  if (cl[0]) return true;
+  const matchRows = await db
+    .select({ search_id: schema.candidateMatches.search_id })
+    .from(schema.candidateMatches)
+    .where(eq(schema.candidateMatches.candidate_id, candidateId))
+    .limit(50);
+  const matchedSearchIds = matchRows
+    .map((m) => m.search_id)
+    .filter((v): v is string => typeof v === "string" && v.length > 0);
+  if (!matchedSearchIds.length) return false;
+  const own = await db
+    .select({ id: schema.searches.id })
+    .from(schema.searches)
+    .where(
+      and(
+        inArray(schema.searches.id, matchedSearchIds),
+        eq(schema.searches.employer_id, employerId),
+      ),
+    )
+    .limit(1);
+  return !!own[0];
 }

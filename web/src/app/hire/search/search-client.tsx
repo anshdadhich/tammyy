@@ -5,6 +5,7 @@ import { useState, type CSSProperties, type KeyboardEvent, type ReactNode } from
 import { DOMAINS, EMPLOYMENT_TYPES } from "@/lib/skills";
 import { jobSchema } from "@/lib/validators";
 import ResultsView from "./results-view";
+import SearchingPanel from "./searching-panel";
 import SkillPicker from "./skill-picker";
 import {
   apiError,
@@ -190,6 +191,10 @@ export default function SearchClient({ session }: Props) {
     setView("results");
   }
 
+  if (view === "searching") {
+    return <SearchingPanel title={status.replace(/^Searching for /, "").replace(/…$/, "") || "your role"} />;
+  }
+
   if (view === "results" || view === "detail") {
     return (
       <ResultsView
@@ -293,10 +298,14 @@ export default function SearchClient({ session }: Props) {
             disabled={searching}
             onClick={() => void runSearch()}
           >
-            <Ico size={18}>
-              <path d="M5 12h14" />
-              <path d="m12 5 7 7-7 7" />
-            </Ico>
+            {searching ? (
+              <span className="spin" aria-hidden="true" />
+            ) : (
+              <Ico size={18}>
+                <path d="M5 12h14" />
+                <path d="m12 5 7 7-7 7" />
+              </Ico>
+            )}
           </button>
         </div>
       </div>
@@ -305,7 +314,14 @@ export default function SearchClient({ session }: Props) {
         className={status ? "field-hint mt-3" : "field-hint"}
         aria-live="polite"
       >
-        {status}
+        {searching ? (
+          <span key={status} className="stage-row inline-flex items-center gap-2">
+            <span className="pulse-dot inline-block w-1.5 h-1.5 rounded-full bg-brand" aria-hidden="true" />
+            {status}
+          </span>
+        ) : (
+          status
+        )}
       </p>
       <p className={error ? "field-error mt-2" : "field-error"} role="alert">
         {error}

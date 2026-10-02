@@ -1,0 +1,65 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "tammy",
+  "main": "src/cloudflare/worker.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "services": [
+    {
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "tammy"
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "tammy",
+      "database_id": "7903e5c5-0428-4266-8782-d2e5778d7ca2",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // R2 must be enabled in the Cloudflare dashboard before this binding can
+  // be attached (API error 10042). Re-enable this block after enabling R2
+  // and running: npx wrangler r2 bucket create tammy-media
+  // "r2_buckets": [
+  //   {
+  //     "binding": "MEDIA",
+  //     "bucket_name": "tammy-media"
+  //   }
+  // ],
+  "vectorize": [
+    {
+      "binding": "VECTORS",
+      "index_name": "tammy-profile-chunks"
+    }
+  ],
+  "ai": {
+    "binding": "AI"
+  },
+  "workflows": [
+    {
+      "binding": "PROFILE_PIPELINE",
+      "name": "profile-pipeline",
+      "class_name": "ProfilePipelineWorkflow"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "PASSWORD_HASHER", "class_name": "PasswordHasher" },
+      { "name": "RATE_LIMITER", "class_name": "RateLimiter" }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "tammy_v1",
+      "new_sqlite_classes": ["PasswordHasher", "RateLimiter"]
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}

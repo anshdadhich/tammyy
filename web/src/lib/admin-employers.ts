@@ -1,4 +1,5 @@
-import { col, Collections } from "@/lib/mongo";
+import { asc, eq, inArray } from "drizzle-orm";
+import { getDb, schema } from "@/db/client";
 
 export type AdminEmployer = {
   id: string;
@@ -13,50 +14,30 @@ export type AdminEmployer = {
   account_email: string | null;
 };
 
-type EmployerListDoc = {
-  _id: string;
-  user_id?: string | null;
-  company_name?: string | null;
-  company_email?: string | null;
-  website?: string | null;
-  linkedin_url?: string | null;
-  company_size?: string | null;
-  industry?: string | null;
-  verification_status?: string | null;
-  created_at?: Date | string | null;
-};
-
-function isoOrNull(v: Date | string | null | undefined): string | null {
-  if (v instanceof Date) return v.toISOString();
-  if (typeof v === "string" && v) return v;
-  return null;
-}
-
 export async function listAdminEmployers(
   status: "pending" | "verified" | "rejected" | "suspended" | "all" = "pending",
   limit = 100,
 ): Promise<AdminEmployer[]> {
-  const employers = await col<EmployerListDoc>(Collections.employers);
-  const filter = status !== "all" ? { verification_status: status } : {};
-  const rows = await employers
-    .find(filter, {
-      projection: {
-        user_id: 1,
-        company_name: 1,
-        company_email: 1,
-        website: 1,
-        linkedin_url: 1,
-        company_size: 1,
-        industry: 1,
-        verification_status: 1,
-        created_at: 1,
-      },
+  const db = await getDb();
+  const capped = Math.min(Math.max(Math.floor(limit), 1), 100);
+  const rows = await db
+    .select({
+      id: schema.employers.id,
+      user_id: schema.employers.user_id,
+      company_name: schema.employers.company_name,
+      company_email: schema.employers.company_email,
+      website: schema.employers.website,
+      linkedin_url: schema.employers.linkedin_url,
+      company_size: schema.employers.company_size,
+      industry: schema.employers.industry,
+      verification_status: schema.employers.verification_status,
+      created_at: schema.employers.created_at,
     })
-    .sort({ created_at: 1 })
-    .limit(Math.min(Math.max(Math.floor(limit), 1), 100))
-    .toArray();
+    .from(schema.employers)
+    .where(status !== "all" ? eq(schema.employers.verification_status, status) : undefined)
+    .orderBy(asc(schema.employers.created_at))
+    .limit(capped);
 
-  // Former join `users!employers_user_id_fkey(email)` → one $in query.
   const userIds = [
     ...new Set(
       rows
@@ -66,17 +47,15 @@ export async function listAdminEmployers(
   ];
   const emailByUser = new Map<string, string>();
   if (userIds.length > 0) {
-    const users = await col<{ _id: string; email?: string }>(Collections.users);
-    const userRows = await users
-      .find({ _id: { $in: userIds } }, { projection: { email: 1 } })
-      .toArray();
-    for (const u of userRows) {
-      if (typeof u.email === "string") emailByUser.set(u._id, u.email);
-    }
+    const userRows = await db
+      .select({ id: schema.users.id, email: schema.users.email })
+      .from(schema.users)
+      .where(inArray(schema.users.id, userIds));
+    for (const u of userRows) emailByUser.set(u.id, u.email);
   }
 
   return rows.map((r) => ({
-    id: r._id,
+    id: r.id,
     company_name: r.company_name ?? null,
     company_email: r.company_email ?? null,
     website: r.website ?? null,
@@ -84,8 +63,7 @@ export async function listAdminEmployers(
     company_size: r.company_size ?? null,
     industry: r.industry ?? null,
     verification_status: r.verification_status ?? null,
-    created_at: isoOrNull(r.created_at),
-    account_email:
-      typeof r.user_id === "string" ? emailByUser.get(r.user_id) ?? null : null,
+    created_at: r.created_at ?? null,
+    account_email: typeof r.user_id === "string" ? emailByUser.get(r.user_id) ?? null : null,
   }));
 }

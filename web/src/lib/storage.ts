@@ -1,20 +1,5 @@
-import { mkdir, readFile, unlink, writeFile } from "fs/promises";
-import path from "path";
-
-/**
- * Local-disk object storage (replaces Supabase Storage buckets).
- *
- * Layout: `<root>/<bucket>/<candidate_uuid>/<filename>`
- *   - root = process.env.STORAGE_DIR when set, else `<cwd>/storage`
- *   - buckets mirror the old Supabase buckets one-to-one
- *
- * Paths stored in Mongo (`candidates.resume_url` etc.) stay the bare
- * `{uuid}/{filename}` value — exactly what the old code stored — so the
- * existing "is this a storage path or an http link?" checks keep working.
- * Access control lives in the route (`/api/uploads`), not in the URL:
- * every download re-checks the session, which is stronger than the old
- * expiring signed URLs.
- */
+import { AwsClient } from "aws4fetch";
+import { cfEnv } from "@/lib/cf";
 
 export const STORAGE_BUCKETS = ["resumes", "photos", "portfolios"] as const;
 export type StorageBucket = (typeof STORAGE_BUCKETS)[number];
@@ -25,7 +10,7 @@ export function isStorageBucket(v: unknown): v is StorageBucket {
 
 /**
  * `{candidate_uuid}/{filename}` — single level, no traversal, no absolute
- * paths. Mirrors the old route-level PATH_RE contract.
+ * paths. Access control lives in the route (`/api/uploads`), not in the URL.
  */
 export function isObjectPath(v: unknown): v is string {
   if (typeof v !== "string") return false;
@@ -37,73 +22,148 @@ export function isObjectPath(v: unknown): v is string {
   return re.test(parts[0]) && /^[A-Za-z0-9._-]{1,200}$/.test(parts[1]);
 }
 
-function storageRoot(): string {
-  return process.env.STORAGE_DIR
-    ? path.resolve(process.env.STORAGE_DIR)
-    : path.join(process.cwd(), "storage");
-}
-
-function resolveObject(bucket: StorageBucket, objectPath: string): string {
+function objectKey(bucket: StorageBucket, objectPath: string): string {
   if (!isStorageBucket(bucket)) throw new Error("unknown storage bucket");
   if (!isObjectPath(objectPath)) throw new Error("invalid object path");
-  const root = storageRoot();
-  const full = path.resolve(root, bucket, objectPath);
-  // Defense in depth: the resolved file must live under the root.
-  if (full !== root && !full.startsWith(root + path.sep)) {
-    throw new Error("object path escapes storage root");
+  return `${bucket}/${objectPath}`;
+}
+
+class StorageNotConfiguredError extends Error {
+  constructor() {
+    super("file storage is not configured yet (R2 pending account enablement)");
+    this.name = "StorageNotConfiguredError";
   }
-  return full;
 }
 
-/** True for Node EEXIST errors thrown by `putObject`. */
-export function isDuplicateObject(e: unknown): boolean {
-  return typeof e === "object" && e !== null && (e as { code?: string }).code === "EEXIST";
+async function media(): Promise<R2Bucket> {
+  const env = await cfEnv();
+  if (!env.MEDIA) throw new StorageNotConfiguredError();
+  return env.MEDIA;
 }
 
-/**
- * Write an object. Fails when the file already exists (mirrors the old
- * `upsert: false` upload option) so callers can map EEXIST → 409.
- */
+export function isStorageNotConfigured(e: unknown): boolean {
+  return e instanceof StorageNotConfiguredError;
+}
+
 export async function putObject(
   bucket: StorageBucket,
   objectPath: string,
-  bytes: Uint8Array,
+  bytes: Uint8Array | ReadableStream,
 ): Promise<void> {
-  const full = resolveObject(bucket, objectPath);
-  await mkdir(path.dirname(full), { recursive: true });
-  await writeFile(full, bytes, { flag: "wx" });
-}
-
-/** Read an object; null when it does not exist. */
-export async function getObject(
-  bucket: StorageBucket,
-  objectPath: string,
-): Promise<Buffer | null> {
-  const full = resolveObject(bucket, objectPath);
-  try {
-    return await readFile(full);
-  } catch (e) {
-    if ((e as { code?: string })?.code === "ENOENT") return null;
+  const key = objectKey(bucket, objectPath);
+  const store = await media();
+  const existing = await store.head(key);
+  if (existing) {
+    const e = new Error("object already exists");
+    (e as { code?: string }).code = "EEXIST";
     throw e;
   }
+  await store.put(key, bytes as unknown as Parameters<R2Bucket["put"]>[1]);
 }
 
-/** Delete an object; missing files are a no-op (mirrors `remove()`). */
-export async function deleteObject(
+export async function getObject(bucket: StorageBucket, objectPath: string): Promise<ArrayBuffer | null> {
+  const key = objectKey(bucket, objectPath);
+  const store = await media();
+  const obj = await store.get(key);
+  return obj ? await obj.arrayBuffer() : null;
+}
+
+export async function getObjectRange(
   bucket: StorageBucket,
   objectPath: string,
-): Promise<void> {
+  range: { offset: number; length: number } | { suffix: number },
+): Promise<Uint8Array | null> {
+  const key = objectKey(bucket, objectPath);
+  const store = await media();
+  const obj = await store.get(key, {
+    range:
+      "suffix" in range
+        ? { suffix: range.suffix }
+        : { offset: range.offset, length: range.length },
+  });
+  return obj ? new Uint8Array(await obj.arrayBuffer()) : null;
+}
+
+export async function objectHead(
+  bucket: StorageBucket,
+  objectPath: string,
+): Promise<{ size: number; contentType: string | null } | null> {
+  const key = objectKey(bucket, objectPath);
+  const store = await media();
+  const obj = await store.head(key);
+  return obj ? { size: obj.size, contentType: obj.httpMetadata?.contentType ?? null } : null;
+}
+
+export async function deleteObject(bucket: StorageBucket, objectPath: string): Promise<void> {
   try {
-    const full = resolveObject(bucket, objectPath);
-    await unlink(full);
+    const key = objectKey(bucket, objectPath);
+    const store = await media();
+    await store.delete(key);
   } catch (e) {
-    if ((e as { code?: string })?.code === "ENOENT") return;
     if (e instanceof Error && /invalid object path|unknown storage bucket/.test(e.message)) return;
     throw e;
   }
 }
 
-/** Same-origin URL served by GET /api/uploads (auth enforced per request). */
-export function objectUrl(bucket: StorageBucket, objectPath: string): string {
-  return `/api/uploads?bucket=${encodeURIComponent(bucket)}&path=${encodeURIComponent(objectPath)}`;
+export function isDuplicateObject(e: unknown): boolean {
+  return typeof e === "object" && e !== null && (e as { code?: string }).code === "EEXIST";
 }
+
+const PRESIGN_EXPIRY_SECONDS = 15 * 60;
+
+function presignDisabled(): boolean {
+  return !(process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY && process.env.R2_ACCOUNT_ID);
+}
+
+/**
+ * Presigned PUT so image bytes go browser → R2 directly and never occupy
+ * Worker CPU (formData parsing of a multi-MB upload blows the free plan's
+ * 10ms budget). Requires R2 S3 API credentials; without them the route
+ * falls back to a Worker-mediated upload so local dev keeps working.
+ */
+export async function presignUpload(
+  bucket: StorageBucket,
+  objectPath: string,
+): Promise<string | null> {
+  if (presignDisabled()) return null;
+  const key = objectKey(bucket, objectPath);
+  const account = process.env.R2_ACCOUNT_ID!;
+  const client = new AwsClient({
+    accessKeyId: process.env.R2_ACCESS_KEY_ID!,
+    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
+  });
+  const url = new URL(
+    `https://${account}.r2.cloudflarestorage.com/${process.env.R2_BUCKET_NAME ?? "tammy-media"}/${key}`,
+  );
+  url.searchParams.set("X-Amz-Expires", String(PRESIGN_EXPIRY_SECONDS));
+  const signed = await client.sign(url.toString(), {
+    method: "PUT",
+    aws: { signQuery: true },
+  });
+  return signed.url;
+}
+
+export async function presignDownload(
+  bucket: StorageBucket,
+  objectPath: string,
+  expiresInSeconds = PRESIGN_EXPIRY_SECONDS,
+): Promise<string | null> {
+  if (presignDisabled()) return null;
+  const key = objectKey(bucket, objectPath);
+  const account = process.env.R2_ACCOUNT_ID!;
+  const client = new AwsClient({
+    accessKeyId: process.env.R2_ACCESS_KEY_ID!,
+    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
+  });
+  const url = new URL(
+    `https://${account}.r2.cloudflarestorage.com/${process.env.R2_BUCKET_NAME ?? "tammy-media"}/${key}`,
+  );
+  url.searchParams.set("X-Amz-Expires", String(expiresInSeconds));
+  const signed = await client.sign(url.toString(), {
+    method: "GET",
+    aws: { signQuery: true },
+  });
+  return signed.url;
+}
+
+export const UPLOAD_PRESIGN_EXPIRES_IN = PRESIGN_EXPIRY_SECONDS;

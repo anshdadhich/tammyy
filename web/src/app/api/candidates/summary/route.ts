@@ -1,6 +1,7 @@
+import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { inngest } from "@/lib/inngest";
-import { AppDoc, col, Collections } from "@/lib/mongo";
+import { getDb, schema } from "@/db/client";
+import { cfEnv } from "@/lib/cf";
 import { guardOwnerAuth } from "@/lib/api-auth";
 import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { readJsonBody } from "@/lib/http";
@@ -8,7 +9,7 @@ import { readJsonBody } from "@/lib/http";
 const uuid = z.string().uuid("Must be a valid UUID");
 
 export async function POST(request: Request) {
-  const rl = rateLimit(request, { key: "candidates-summary", limit: 5, windowMs: 60 * 60_000 });
+  const rl = await rateLimit(request, { key: "candidates-summary", limit: 5, windowMs: 60 * 60_000 });
   if (!rl.ok) return rateLimitResponse(rl.retryAfterMs);
   const read = await readJsonBody(request, 4 * 1024);
   if (!read.ok) return read.response;
@@ -19,16 +20,25 @@ export async function POST(request: Request) {
   }
   const denied = await guardOwnerAuth(request, parsed.data.id);
   if (denied) return denied;
-  let existing: { _id: string } | null = null;
+  let existing: { id: string } | undefined;
   try {
-    const candidates = await col<AppDoc>(Collections.candidates);
-    existing = await candidates.findOne({ _id: parsed.data.id }, { projection: { _id: 1 } });
+    const db = await getDb();
+    const rows = await db
+      .select({ id: schema.candidates.id })
+      .from(schema.candidates)
+      .where(eq(schema.candidates.id, parsed.data.id))
+      .limit(1);
+    existing = rows[0];
   } catch {
-    existing = null;
+    existing = undefined;
   }
   if (!existing) return Response.json({ error: "candidate not found" }, { status: 404 });
   try {
-    await inngest.send({ name: "candidate.profile.submitted", data: { candidateId: parsed.data.id } });
+    const env = await cfEnv();
+    await env.PROFILE_PIPELINE.create({
+      id: `${parsed.data.id}-${Date.now()}`,
+      params: { candidateId: parsed.data.id },
+    });
   } catch {
     return Response.json({ error: "Could not start regeneration. Try again." }, { status: 502 });
   }

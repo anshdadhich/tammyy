@@ -1,4 +1,5 @@
-import { AppDoc, col, Collections } from "@/lib/mongo";
+import { eq } from "drizzle-orm";
+import { getDb, schema } from "@/db/client";
 import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { readJsonBody } from "@/lib/http";
 import { signaturesEqual as secretsEqual } from "@/lib/api-auth";
@@ -13,7 +14,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const rl = rateLimit(request, { key: "admin-bootstrap", limit: 5, windowMs: 60 * 60_000 });
+  const rl = await rateLimit(request, { key: "admin-bootstrap", limit: 5, windowMs: 60 * 60_000 });
   if (!rl.ok) return rateLimitResponse(rl.retryAfterMs);
   const requiredSecret = process.env.BOOTSTRAP_SECRET;
   if (!requiredSecret) {
@@ -46,31 +47,37 @@ export async function POST(request: Request) {
   if (allowlisted && !secretsEqual(email, allowlisted)) {
     return Response.json({ error: "bootstrap closed for this email" }, { status: 403 });
   }
-  const db = await col<AppDoc>(Collections.users);
-  let existingAdmin: { _id: string } | null = null;
+  const db = await getDb();
+  let existingAdmin: { id: string } | undefined;
   try {
-    existingAdmin = await db.findOne({ role: "admin" }, { projection: { _id: 1 } });
+    const rows = await db
+      .select({ id: schema.users.id })
+      .from(schema.users)
+      .where(eq(schema.users.role, "admin"))
+      .limit(1);
+    existingAdmin = rows[0];
   } catch {
     return Response.json({ error: "bootstrap closed - try again" }, { status: 403 });
   }
   if (existingAdmin) {
     return Response.json({ error: "bootstrap closed - an admin already exists" }, { status: 403 });
   }
-  let data: AppDoc | null = null;
+  let data: { id: string; email: string; role: string } | undefined;
   try {
-    data = await db.findOneAndUpdate(
-      { email },
-      { $set: { role: "admin" } },
-      { returnDocument: "after", projection: { email: 1, role: 1 } },
-    );
+    const updated = await db
+      .update(schema.users)
+      .set({ role: "admin" })
+      .where(eq(schema.users.email, email))
+      .returning({ id: schema.users.id, email: schema.users.email, role: schema.users.role });
+    data = updated[0];
   } catch {
-    data = null;
+    data = undefined;
   }
   if (!data) {
     return Response.json({ error: "email not found - sign up first" }, { status: 404 });
   }
   return Response.json({
     ok: true,
-    admin: { id: data._id, email: data.email as string, role: data.role as string },
+    admin: { id: data.id, email: data.email, role: data.role },
   });
 }

@@ -37,27 +37,27 @@ export function lockContacts<T extends Record<string, unknown>>(row: T): T {
   return out as T;
 }
 
-import { AppDoc, col, Collections } from "@/lib/mongo";
+import { eq } from "drizzle-orm";
+import { getDb, schema } from "@/db/client";
 
-/** Candidates this employer has shortlisted or contacted (MongoDB). */
+/** Candidates this employer has shortlisted or contacted. */
 export async function revealedCandidateIds(
   employerId: string,
 ): Promise<Set<string>> {
   const out = new Set<string>();
   try {
-    const [shortlists, contactLog] = await Promise.all([
-      col<AppDoc>(Collections.shortlists),
-      col<AppDoc>(Collections.contactLog),
-    ]);
+    const db = await getDb();
     const [slRows, clRows] = await Promise.all([
-      shortlists
-        .find({ employer_id: employerId }, { projection: { candidate_id: 1 } })
-        .limit(10000)
-        .toArray(),
-      contactLog
-        .find({ employer_id: employerId }, { projection: { candidate_id: 1 } })
-        .limit(10000)
-        .toArray(),
+      db
+        .select({ candidate_id: schema.shortlists.candidate_id })
+        .from(schema.shortlists)
+        .where(eq(schema.shortlists.employer_id, employerId))
+        .limit(10000),
+      db
+        .select({ candidate_id: schema.contactLog.candidate_id })
+        .from(schema.contactLog)
+        .where(eq(schema.contactLog.employer_id, employerId))
+        .limit(10000),
     ]);
     for (const r of slRows) {
       if (r.candidate_id) out.add(String(r.candidate_id));

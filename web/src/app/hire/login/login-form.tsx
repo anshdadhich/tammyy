@@ -122,7 +122,7 @@ export default function LoginForm({ initialStage = "signin" }: { initialStage?: 
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    const json = await res.json().catch(() => ({}));
+    const json = (await res.json().catch(() => ({}))) as ApiFailure & Record<string, unknown>;
     return { ok: res.ok, status: res.status, json };
   }
 

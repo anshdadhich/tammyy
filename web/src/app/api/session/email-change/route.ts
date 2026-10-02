@@ -3,7 +3,8 @@ import { issueEmailChangeToken } from "@/lib/api-auth";
 import { getSessionUser, requireOwnerDb } from "@/lib/auth-user";
 import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { normalizeEmail } from "@/lib/validators";
-import { AppDoc, col, Collections } from "@/lib/mongo";
+import { eq } from "drizzle-orm";
+import { getDb, schema } from "@/db/client";
 import { readJsonBody } from "@/lib/http";
 
 const bodySchema = z.object({
@@ -12,7 +13,7 @@ const bodySchema = z.object({
 });
 
 export async function POST(request: Request) {
-  const rl = rateLimit(request, { key: "session-email-change", limit: 10, windowMs: 10 * 60_000 });
+  const rl = await rateLimit(request, { key: "session-email-change", limit: 10, windowMs: 10 * 60_000 });
   if (!rl.ok) return rateLimitResponse(rl.retryAfterMs);
   const session = await getSessionUser();
   const read = await readJsonBody(request, 4 * 1024);
@@ -38,28 +39,32 @@ export async function POST(request: Request) {
   }
   let current = "";
   try {
-    const candidates = await col<{ _id: string; contact_email?: string | null }>(
-      Collections.candidates,
-    );
-    const row = await candidates.findOne(
-      { _id: parsed.data.id },
-      { projection: { contact_email: 1 } },
-    );
-    current = normalizeEmail(row?.contact_email ?? "");
+    const db = await getDb();
+    const rows = await db
+      .select({ contact_email: schema.candidates.contact_email })
+      .from(schema.candidates)
+      .where(eq(schema.candidates.id, parsed.data.id))
+      .limit(1);
+    current = normalizeEmail(rows[0]?.contact_email ?? "");
   } catch {
     current = "";
   }
   if (!newEmail || newEmail === current) {
     return Response.json({ error: "That is already the email on this profile." }, { status: 400 });
   }
-  let clash: AppDoc | null = null;
+  let clash: { id: string } | undefined;
   try {
-    const users = await col<AppDoc>(Collections.users);
-    clash = await users.findOne({ email: newEmail }, { projection: { _id: 1 } });
+    const db = await getDb();
+    const rows = await db
+      .select({ id: schema.users.id })
+      .from(schema.users)
+      .where(eq(schema.users.email, newEmail))
+      .limit(1);
+    clash = rows[0];
   } catch {
-    clash = null;
+    clash = undefined;
   }
-  if (clash?._id) {
+  if (clash?.id) {
     return Response.json({ error: "That email is already in use." }, { status: 409 });
   }
   const token = issueEmailChangeToken(parsed.data.id, newEmail);

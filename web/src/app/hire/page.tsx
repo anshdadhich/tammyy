@@ -1,6 +1,9 @@
+import SectionReveals from "@/components/SectionReveals";
 import type { Metadata } from "next";
 import Link from "next/link";
 import PageShell from "@/components/PageShell";
+import TraceFill from "@/components/TraceFill";
+import BeamCta from "@/components/BeamCta";
 
 export const metadata: Metadata = {
   title: "For employers",
@@ -47,7 +50,8 @@ const arrowIcon = (
 export default async function HirePage() {
   return (
     <PageShell variant="hire" active="/hire">
-      <section className="pt-20 lg:pt-28 pb-16">
+      <SectionReveals />
+      <section className="pt-20 lg:pt-28 pb-16" data-reveal-section>
         <div className="max-w-[1160px] mx-auto px-6">
           <div className="grid gap-12 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
             <div>
@@ -70,9 +74,9 @@ export default async function HirePage() {
                 style={{ "--d": "160ms" } as React.CSSProperties}
               >
                 <span style={{ display: "inline-block", borderRadius: "999px" }}>
-                  <Link href="/hire/search" className="btn btn-primary press">
+                  <BeamCta><Link href="/hire/search" className="btn btn-primary press">
                     {searchIcon} Start a search
-                  </Link>
+                  </Link></BeamCta>
                 </span>
                 <Link href="/hire/login" className="btn btn-secondary press">
                   Employer login {arrowIcon}
@@ -105,7 +109,7 @@ export default async function HirePage() {
                       </span>
                     </div>
                     <div className="trace-rule" aria-hidden="true">
-                      <div className="trace-fill" style={{ width: "84%", background: "#1F2DE6" }} />
+                      <TraceFill width="84%" background="#1F2DE6" />
                     </div>
                   </div>
                   <div>
@@ -123,7 +127,7 @@ export default async function HirePage() {
                       </span>
                     </div>
                     <div className="trace-rule" aria-hidden="true">
-                      <div className="trace-fill" style={{ width: "76%", background: "#1F2DE6" }} />
+                      <TraceFill width="76%" background="#1F2DE6" />
                     </div>
                   </div>
                 </div>
@@ -133,7 +137,7 @@ export default async function HirePage() {
         </div>
       </section>
 
-      <section className="py-14">
+      <section className="py-14" data-reveal-section>
         <div className="max-w-[1160px] mx-auto px-6">
           <h2 className="text-[clamp(1.75rem,3.2vw,2.5rem)] font-semibold tracking-[-0.02em] leading-[1.12] text-ink">
             How a search runs.
@@ -207,7 +211,7 @@ export default async function HirePage() {
         </div>
       </section>
 
-      <section className="py-14">
+      <section className="py-14" data-reveal-section>
         <div className="max-w-[1160px] mx-auto px-6">
           <div className="rounded-2xl bg-surface shadow-soft-md p-7 sm:p-10 grid gap-10 lg:grid-cols-[0.9fr_1.1fr] lg:items-center">
             <div>
@@ -226,7 +230,7 @@ export default async function HirePage() {
                   <span className="font-mono text-[13px] text-muted">25%</span>
                 </div>
                 <div className="trace-rule" aria-hidden="true">
-                  <div className="trace-fill" style={{ width: "25%", background: "#1F2DE6" }} />
+                  <TraceFill width="25%" background="#1F2DE6" />
                 </div>
               </div>
               <div>
@@ -235,7 +239,7 @@ export default async function HirePage() {
                   <span className="font-mono text-[13px] text-muted">25%</span>
                 </div>
                 <div className="trace-rule" aria-hidden="true">
-                  <div className="trace-fill" style={{ width: "25%", background: "#1F2DE6" }} />
+                  <TraceFill width="25%" background="#1F2DE6" />
                 </div>
               </div>
               <div>
@@ -244,7 +248,7 @@ export default async function HirePage() {
                   <span className="font-mono text-[13px] text-muted">20%</span>
                 </div>
                 <div className="trace-rule" aria-hidden="true">
-                  <div className="trace-fill" style={{ width: "20%", background: "#1F2DE6" }} />
+                  <TraceFill width="20%" background="#1F2DE6" />
                 </div>
               </div>
               <div>
@@ -253,7 +257,7 @@ export default async function HirePage() {
                   <span className="font-mono text-[13px] text-muted">15%</span>
                 </div>
                 <div className="trace-rule" aria-hidden="true">
-                  <div className="trace-fill" style={{ width: "15%", background: "#1F2DE6" }} />
+                  <TraceFill width="15%" background="#1F2DE6" />
                 </div>
               </div>
               <div>
@@ -262,7 +266,7 @@ export default async function HirePage() {
                   <span className="font-mono text-[13px] text-muted">10%</span>
                 </div>
                 <div className="trace-rule" aria-hidden="true">
-                  <div className="trace-fill" style={{ width: "10%", background: "#1F2DE6" }} />
+                  <TraceFill width="10%" background="#1F2DE6" />
                 </div>
               </div>
             </div>
@@ -270,7 +274,7 @@ export default async function HirePage() {
         </div>
       </section>
 
-      <section className="py-14 pb-24">
+      <section className="py-14 pb-24" data-reveal-section>
         <div className="max-w-[1160px] mx-auto px-6">
           <div className="rounded-2xl bg-surface shadow-soft-md p-8 sm:p-12 text-center">
             <h2 className="text-[clamp(1.75rem,3.2vw,2.5rem)] font-semibold tracking-[-0.02em] text-ink">
@@ -282,9 +286,9 @@ export default async function HirePage() {
             </p>
             <div className="flex flex-wrap items-center justify-center gap-3 mt-7">
               <span style={{ display: "inline-block", borderRadius: "999px" }}>
-                <Link href="/hire/search" className="btn btn-primary press">
+                <BeamCta><Link href="/hire/search" className="btn btn-primary press">
                   Start a search {arrowIcon}
-                </Link>
+                </Link></BeamCta>
               </span>
               <Link href="/hire/login" className="btn btn-secondary press">
                 Sign in

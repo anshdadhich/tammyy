@@ -1,6 +1,9 @@
 import Link from "next/link";
 import PageShell from "@/components/PageShell";
 import { FaqList, HeroDemo } from "@/app/landing-interactives";
+import SectionReveals from "@/components/SectionReveals";
+import BeamCta from "@/components/BeamCta";
+import TraceFill from "@/components/TraceFill";
 
 const PIPELINE = [
   {
@@ -80,6 +83,7 @@ const DOSSIER_SKILLS = ["Python", "Distributed Systems", "Kubernetes", "PostgreS
 export default async function HomePage() {
   return (
     <PageShell variant="landing" active="/#candidates" footer>
+      <SectionReveals />
       <section id="top" className="relative pt-20 lg:pt-28 pb-24 overflow-hidden">
         <div className="max-w-[1160px] mx-auto px-6">
           <h1
@@ -95,11 +99,12 @@ export default async function HomePage() {
             className="rise flex flex-wrap items-center gap-3 mt-8"
             style={{ "--d": "160ms" } as React.CSSProperties}
           >
-            <span style={{ display: "inline-block", borderRadius: "999px" }}>
+            <BeamCta>
               <Link href="/join" className="btn btn-primary">
                 Build my page
               </Link>
-            </span>
+            </BeamCta>
+            <BeamCta>
             <Link href="/hire/login" className="btn btn-secondary press">
               I&apos;m hiring{" "}
               <svg
@@ -118,14 +123,15 @@ export default async function HomePage() {
                 <path d="M5 12h14" />
                 <path d="m12 5 7 7-7 7" />
               </svg>
-            </Link>
+              </Link>
+            </BeamCta>
           </div>
 
           <HeroDemo />
         </div>
       </section>
 
-      <section className="py-24">
+      <section className="py-24" data-reveal-section>
         <div className="max-w-[1160px] mx-auto px-6">
           <div className="mb-10 lg:mb-14">
             <h2 className="text-[clamp(1.75rem,3.2vw,2.5rem)] font-semibold tracking-[-0.02em] leading-[1.12] text-ink">
@@ -185,7 +191,7 @@ export default async function HomePage() {
         </div>
       </section>
 
-      <section id="candidates" className="py-24">
+      <section id="candidates" className="py-24" data-reveal-section>
         <div className="max-w-[1160px] mx-auto px-6">
           <div className="mb-10 lg:mb-14">
             <h2 className="text-[clamp(1.75rem,3.2vw,2.5rem)] font-semibold tracking-[-0.02em] leading-[1.12] text-ink">
@@ -236,7 +242,7 @@ export default async function HomePage() {
               <h3 className="text-base font-semibold text-ink mb-1">Show what you built.</h3>
               <p className="text-[13px] text-muted mb-5">Evidence makes the profile useful.</p>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="border border-line rounded-xl p-3 bg-inset">
                   <div className="text-[10px] font-mono text-muted uppercase mb-1">Project</div>
                   <div className="text-[13px] font-semibold text-ink">Distributed inference service</div>
@@ -267,7 +273,7 @@ export default async function HomePage() {
         </div>
       </section>
 
-      <section id="engine" className="py-24">
+      <section id="engine" className="py-24" data-reveal-section>
         <div className="max-w-[1160px] mx-auto px-6">
           <div className="mb-10 lg:mb-14">
             <h2 className="text-[clamp(1.75rem,3.2vw,2.5rem)] font-semibold tracking-[-0.02em] leading-[1.12] text-ink">
@@ -302,10 +308,7 @@ export default async function HomePage() {
                     <span className="text-[13px] font-semibold text-ink">{p.fill}</span>
                   </div>
                   <div className="trace-rule" aria-hidden="true">
-                    <div
-                      className="trace-fill"
-                      style={{ width: p.fill, background: "var(--brand)" }}
-                    />
+                    <TraceFill width={p.fill} />
                   </div>
                 </div>
               ))}
@@ -314,7 +317,7 @@ export default async function HomePage() {
         </div>
       </section>
 
-      <section className="py-24">
+      <section className="py-24" data-reveal-section>
         <div className="max-w-[1160px] mx-auto px-6">
           <div className="mb-10 lg:mb-14">
             <h2 className="text-[clamp(1.75rem,3.2vw,2.5rem)] font-semibold tracking-[-0.02em] leading-[1.12] text-ink">
@@ -368,7 +371,7 @@ export default async function HomePage() {
         </div>
       </section>
 
-      <section className="py-24">
+      <section className="py-24" data-reveal-section>
         <div className="max-w-[1160px] mx-auto px-6">
           <div className="mb-10 lg:mb-14">
             <h2 className="text-[clamp(1.75rem,3.2vw,2.5rem)] font-semibold tracking-[-0.02em] leading-[1.12] text-ink">
@@ -456,7 +459,7 @@ export default async function HomePage() {
         </div>
       </section>
 
-      <section className="py-24">
+      <section className="py-24" data-reveal-section>
         <div className="max-w-[1160px] mx-auto px-6">
           <div className="mb-10 lg:mb-14">
             <h2 className="text-[clamp(1.75rem,3.2vw,2.5rem)] font-semibold tracking-[-0.02em] leading-[1.12] text-ink">
@@ -488,7 +491,7 @@ export default async function HomePage() {
         </div>
       </section>
 
-      <section id="faq" className="py-24">
+      <section id="faq" className="py-24" data-reveal-section>
         <div className="max-w-[920px] mx-auto px-6">
           <div className="text-center max-w-2xl mx-auto mb-10">
             <h2 className="text-[clamp(1.75rem,3.2vw,2.5rem)] font-semibold tracking-[-0.02em] leading-[1.12] text-ink">

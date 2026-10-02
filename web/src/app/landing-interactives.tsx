@@ -51,10 +51,63 @@ export function HeroDemo() {
   const [statuses, setStatuses] = useState<StepStatus[]>(INITIAL_STATUSES);
   const runningRef = useRef(false);
   const timerRef = useRef<number | null>(null);
+  const switcherRef = useRef<HTMLDivElement>(null);
+  const pillReadyRef = useRef(false);
+  const rotateRef = useRef<number | null>(null);
+  const pauseTicksRef = useRef(0);
 
   useEffect(() => {
     return () => {
       if (timerRef.current !== null) window.clearInterval(timerRef.current);
+      if (rotateRef.current !== null) window.clearInterval(rotateRef.current);
+    };
+  }, []);
+
+  // One gliding pill tracks the active mode button.
+  useEffect(() => {
+    const container = switcherRef.current;
+    const pill = container?.querySelector<HTMLElement>(".match-mode-pill");
+    if (!container || !pill) return;
+    const move = () => {
+      const target = container.querySelector<HTMLElement>(
+        `[data-mode-item="${mode}"]`,
+      );
+      if (!target) return;
+      pill.style.opacity = "1";
+      pill.style.width = `${target.offsetWidth}px`;
+      pill.style.transform = `translateX(${target.offsetLeft}px)`;
+      if (!pillReadyRef.current) {
+        pill.style.transition = "none";
+        pill.getBoundingClientRect();
+        pill.style.transition = "";
+        pillReadyRef.current = true;
+      }
+    };
+    move();
+    const ro = new ResizeObserver(move);
+    ro.observe(container);
+    document.fonts?.ready.then(() => move()).catch(() => {});
+    return () => ro.disconnect();
+  }, [mode]);
+
+  // Auto-rotate the hero mode every 4.5s unless the visitor took over
+  // recently (3 idle ticks ≈ 13s), the tab is hidden, or motion is reduced.
+  useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    rotateRef.current = window.setInterval(() => {
+      if (document.hidden) return;
+      if (pauseTicksRef.current > 0) {
+        pauseTicksRef.current -= 1;
+        return;
+      }
+      setMode((cur) => {
+        const idx = MATCH_MODES.findIndex((m) => m.key === cur);
+        return MATCH_MODES[(idx + 1) % MATCH_MODES.length].key;
+      });
+    }, 4500);
+    return () => {
+      if (rotateRef.current !== null) window.clearInterval(rotateRef.current);
+      rotateRef.current = null;
     };
   }, []);
 
@@ -79,11 +132,13 @@ export function HeroDemo() {
   }
 
   function selectMode(next: MatchMode) {
+    pauseTicksRef.current = 3;
     setMode(next);
     if (next === "search") runChecklist();
   }
 
   function runQuery() {
+    pauseTicksRef.current = 3;
     setMode("search");
     runChecklist();
   }
@@ -154,20 +209,20 @@ export function HeroDemo() {
 
         <div className="lg:col-span-2 lg:pt-1">
           <div className="match-controls">
-            <div className="match-mode-switcher">
+            <div className="match-mode-switcher" ref={switcherRef}>
+              <span className="match-mode-pill" aria-hidden="true" />
               {MATCH_MODES.map((m) => {
                 const active = mode === m.key;
                 return (
                   <button
                     key={m.key}
                     type="button"
+                    data-mode-item={m.key}
                     className={`match-mode${active ? " is-active" : ""}`}
                     aria-pressed={active}
-                    style={{ position: "relative" }}
                     onClick={() => selectMode(m.key)}
                   >
-                    {active && <span className="match-mode-pill" />}
-                    <span style={{ position: "relative" }}>{m.label}</span>
+                    {m.label}
                   </button>
                 );
               })}
@@ -199,7 +254,7 @@ export function HeroDemo() {
           </div>
 
           <div className="relative mt-10 min-h-[88px]">
-            <div>
+            <div key={mode} className="match-copy">
               <h3 className="text-lg font-semibold tracking-[-0.01em] text-ink">
                 {MATCH_COPY[mode].title}
               </h3>
@@ -234,7 +289,7 @@ const FAQS = [
 ];
 
 export function FaqList() {
-  const [open, setOpen] = useState<number | null>(0);
+  const [open, setOpen] = useState<number | null>(null);
 
   return (
     <div className="faq-list max-w-2xl mx-auto w-full">
