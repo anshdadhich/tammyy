@@ -247,7 +247,8 @@ export default function DitherCanvas({
       document.removeEventListener("visibilitychange", onVisibility);
       themeObserver.disconnect();
       io?.disconnect();
-      gl.getExtension("WEBGL_lose_context")?.loseContext();
+      gl.deleteProgram(prog);
+      gl.deleteBuffer(buf);
     };
   }, [scale, speed, front, back]);
 
