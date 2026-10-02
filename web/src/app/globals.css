@@ -2183,3 +2183,10 @@ details.judge[open] summary > svg:last-child { transform: rotate(180deg); }
   .site-mobile-nav > * { opacity: 1; transform: none; }
   .match-mode-pill { transition: none; }
 }
+
+/* Coarse-pointer tap targets (44px minimum) */
+@media (pointer: coarse) {
+  .chip-x { width: 44px; height: 44px; }
+  .btn-sm { min-height: 44px; }
+  .nav-avatar { width: 44px; height: 44px; }
+}

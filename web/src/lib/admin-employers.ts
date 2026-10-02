@@ -3,6 +3,7 @@ import { getDb, schema } from "@/db/client";
 
 export type AdminEmployer = {
   id: string;
+  plan: string | null;
   company_name: string | null;
   company_email: string | null;
   website: string | null;
@@ -54,8 +55,15 @@ export async function listAdminEmployers(
     for (const u of userRows) emailByUser.set(u.id, u.email);
   }
 
+  const quotaRows = await db
+    .select({ employer_id: schema.employerQuotas.employer_id, plan: schema.employerQuotas.plan })
+    .from(schema.employerQuotas)
+    .where(inArray(schema.employerQuotas.employer_id, rows.map((r) => r.id)));
+  const planByEmployer = new Map(quotaRows.map((q) => [q.employer_id, q.plan]));
+
   return rows.map((r) => ({
     id: r.id,
+    plan: planByEmployer.get(r.id) ?? "free",
     company_name: r.company_name ?? null,
     company_email: r.company_email ?? null,
     website: r.website ?? null,

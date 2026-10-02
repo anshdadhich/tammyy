@@ -50,12 +50,18 @@ async function embedBatch(texts: string[]): Promise<number[][]> {
   });
 }
 
+/**
+ * Returns one vector per input, in input order — callers zip results back to
+ * their inputs, so blank strings are an error rather than a silent drop.
+ */
 export async function embedTexts(texts: string[]): Promise<number[][]> {
-  const clean = texts.map((t) => t.trim()).filter(Boolean);
-  if (!clean.length) return [];
+  if (!texts.length) return [];
+  if (texts.some((t) => !t.trim())) {
+    throw new Error("embedTexts: blank input would break index alignment");
+  }
   const out: number[][] = [];
-  for (let i = 0; i < clean.length; i += MAX_BATCH) {
-    out.push(...(await embedBatch(clean.slice(i, i + MAX_BATCH))));
+  for (let i = 0; i < texts.length; i += MAX_BATCH) {
+    out.push(...(await embedBatch(texts.slice(i, i + MAX_BATCH))));
   }
   return out;
 }

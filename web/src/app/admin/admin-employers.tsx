@@ -45,7 +45,9 @@ export default function AdminEmployers({
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
-  const [plans, setPlans] = useState<Record<string, string>>({});
+  const [plans, setPlans] = useState<Record<string, string>>(
+    () => Object.fromEntries(initialEmployers.map((r) => [r.id, r.plan ?? "free"])),
+  );
 
   async function load(next: Status): Promise<void> {
     setLoading(true);
@@ -173,7 +175,7 @@ export default function AdminEmployers({
                       className="input"
                       style={{ maxWidth: 130 }}
                       aria-label={`Billing plan for ${row.company_name ?? "employer"}`}
-                      value={plans[row.id] ?? "free"}
+                      value={plans[row.id] ?? row.plan ?? "free"}
                       disabled={locked}
                       onChange={(e) => void act(row.id, "set_plan", e.target.value)}
                     >

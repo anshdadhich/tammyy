@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { motion } from "motion/react";
+import { motion, useReducedMotion } from "motion/react";
 import DitherCanvas from "@/components/DitherCanvas";
 
 const CHECKLIST_STEPS = [
@@ -52,6 +52,7 @@ export function HeroDemo() {
   const [statuses, setStatuses] = useState<StepStatus[]>(INITIAL_STATUSES);
   const runningRef = useRef(false);
   const timerRef = useRef<number | null>(null);
+  const reduceMotion = useReducedMotion();
   const rotateRef = useRef<number | null>(null);
   const pauseTicksRef = useRef(0);
 
@@ -86,6 +87,10 @@ export function HeroDemo() {
 
   function runChecklist() {
     if (runningRef.current) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      setStatuses(CHECKLIST_STEPS.map(() => "done" as StepStatus));
+      return;
+    }
     runningRef.current = true;
     setStatuses(CHECKLIST_STEPS.map(() => "queued" as StepStatus));
     let i = 0;
@@ -198,7 +203,7 @@ export function HeroDemo() {
                         layoutId="match-mode-pill"
                         className="match-mode-pill"
                         initial={false}
-                        transition={{ type: "spring", stiffness: 500, damping: 35 }}
+                        transition={reduceMotion ? { duration: 0 } : { type: "spring", stiffness: 500, damping: 35 }}
                         aria-hidden="true"
                       />
                     ) : null}

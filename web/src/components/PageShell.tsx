@@ -18,7 +18,7 @@ export default async function PageShell({ children, variant = "landing", active,
         Skip to content
       </a>
       <AppNav variant={variant} active={active} viewer={nav} />
-      <main id="main-content">{children}</main>
+      <main id="main-content" tabIndex={-1}>{children}</main>
       {footer && <SiteFooter />}
     </div>
   );

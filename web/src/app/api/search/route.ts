@@ -126,7 +126,7 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
     staff: { min: 8, max: 15 },
   };
   const seniorityBand = seniorityBands[(j.seniority ?? "").trim().toLowerCase()];
-  const rangeUnconstrained = (j.min_exp ?? 0) <= 0 && (j.max_exp ?? 50) >= 50;
+  const rangeUnconstrained = (j.min_exp ?? 0) <= 0 && (j.max_exp ?? 50) >= 50 || (!("min_exp" in j) && !("max_exp" in j));
   const jobReq: JobReq = {
     job_title: j.title,
     domain: j.domain,
@@ -181,6 +181,7 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
           })
           .from(schema.workExperiences)
           .where(inArray(schema.workExperiences.candidate_id, ids))
+          .orderBy(desc(schema.workExperiences.start_date))
           .limit(ids.length * MAX_EXP_ATTACH),
         db
           .select({
@@ -199,6 +200,7 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
           })
           .from(schema.projects)
           .where(inArray(schema.projects.candidate_id, ids))
+          .orderBy(desc(schema.projects.created_at))
           .limit(ids.length * MAX_PROJECTS_ATTACH),
         db
           .select({
@@ -212,6 +214,7 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
           })
           .from(schema.education)
           .where(inArray(schema.education.candidate_id, ids))
+          .orderBy(desc(schema.education.end_year))
           .limit(ids.length * MAX_EXP_ATTACH),
         db
           .select({
@@ -378,7 +381,11 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
     const cached = await loadCachedMatches(recent.id);
     if (cached?.length) {
       if (deep) {
-        const judged = cached.filter((m) => isJudgePayload((m as { match_reasons_json?: unknown }).match_reasons_json));
+        const judged = cached.filter(
+          (m) =>
+            isJudgePayload((m as { match_reasons_json?: unknown }).match_reasons_json) ||
+            typeof (m as { score?: unknown }).score === "number",
+        );
         if (judged.length) {
           const flattened: Record<string, unknown>[] = [];
           for (const m of judged) {
@@ -512,6 +519,7 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
           remote_preference: schema.candidates.remote_preference,
           location_city: schema.candidates.location_city,
           availability_status: schema.candidates.availability_status,
+          updated_at: schema.candidates.updated_at,
           show_email: schema.candidates.show_email,
           show_phone: schema.candidates.show_phone,
           show_linkedin: schema.candidates.show_linkedin,
@@ -821,6 +829,7 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
             })
             .from(schema.workExperiences)
             .where(inArray(schema.workExperiences.candidate_id, topIds))
+            .orderBy(desc(schema.workExperiences.start_date))
             .limit(topIds.length * MAX_EXP_ATTACH)
         : Promise.resolve([] as Record<string, unknown>[]),
       topIds.length
@@ -833,6 +842,15 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
               autonomy_level: schema.projectDepthAnalysis.autonomy_level,
             })
             .from(schema.projectDepthAnalysis)
+            .where(
+              inArray(
+                schema.projectDepthAnalysis.project_id,
+                db
+                  .select({ id: schema.projects.id })
+                  .from(schema.projects)
+                  .where(inArray(schema.projects.candidate_id, topIds)),
+              ),
+            )
         : Promise.resolve([] as Record<string, unknown>[]),
     ]);
     const candById = new Map(
@@ -885,14 +903,9 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
         },
       };
     });
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const judged = (await Promise.race([
-      judgeTop(inputs, defaultOpenAIProvider(), JUDGE_CONCURRENCY, { timeoutMs: JUDGE_TIMEOUT_MS }),
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("Deep judge overall deadline exceeded")), 40000);
-      }),
-    ])) as Array<JudgeResult | null>;
-    if (timer) clearTimeout(timer);
+    const judged = (await judgeTop(inputs, defaultOpenAIProvider(), JUDGE_CONCURRENCY, {
+      timeoutMs: JUDGE_TIMEOUT_MS,
+    })) as Array<JudgeResult | null>;
     const judgeNulls = judged.filter((jj) => jj == null).length;
     wev.add({ judge_nulls: judgeNulls, judged: judged.length });
     const merged = top.map((r, i) => {

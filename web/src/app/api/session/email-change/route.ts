@@ -3,10 +3,16 @@ import { issueEmailChangeToken } from "@/lib/api-auth";
 import { getSessionUser, requireOwnerDb } from "@/lib/auth-user";
 import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { normalizeEmail } from "@/lib/validators";
+import { sendEmail } from "@/lib/email";
 import { eq } from "drizzle-orm";
 import { getDb, schema } from "@/db/client";
 import { readJsonBody } from "@/lib/http";
 
+/**
+ * POST /api/session/email-change — sends a confirmation link to the NEW
+ * address. The token is embedded in the emailed link only; it is never
+ * returned to the requester, so possession of it proves mailbox ownership.
+ */
 const bodySchema = z.object({
   id: z.string().uuid(),
   newEmail: z.string().trim().email().max(320),
@@ -71,5 +77,21 @@ export async function POST(request: Request) {
   if (!token) {
     return Response.json({ error: "Try again shortly." }, { status: 503 });
   }
-  return Response.json({ token });
+  const verifyUrl = `${siteOrigin()}/api/session/email-change?confirm=${encodeURIComponent(token)}&id=${encodeURIComponent(parsed.data.id)}&email=${encodeURIComponent(newEmail)}`;
+  const result = await sendEmail(
+    newEmail,
+    "Confirm your new email on Tammy",
+    `<p>Confirm this address for your Tammy profile:</p><p><a href="${verifyUrl}">Confirm email change</a></p><p>This link expires in 15 minutes. If you didn't request this, ignore it.</p>`,
+  );
+  return Response.json({ ok: true, delivered: !result.skipped, verifyUrl: undefined });
+}
+
+function siteOrigin(): string {
+  const raw = (process.env.NEXT_PUBLIC_SITE_URL ?? "").trim();
+  try {
+    const u = new URL(raw);
+    return u.origin;
+  } catch {
+    return "https://tammy.tammy-app.workers.dev";
+  }
 }

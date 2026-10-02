@@ -88,8 +88,14 @@ export function constraintsScore(job: JobReq, ctx: ScoreContext): number {
   if (job.remote_allowed && (ctx.remotePref === "remote_only" || ctx.remotePref === "flexible")) location = 1;
   else if (!job.location) location = 0.8;
   else if (remoteOk) location = 0.8;
-  else location = 0.2;
-  const avail = !ctx.availability || /immedi/i.test(ctx.availability) ? 1 : /notice/i.test(ctx.availability) ? 0.6 : 0.4;
+  else {
+    // Job is on-site and the candidate needs to be there too — score the
+    // actual city match instead of a blanket pass.
+    const want = (job.location ?? "").trim().toLowerCase();
+    const have = (ctx.locationCity ?? "").trim().toLowerCase();
+    location = want && have && have.includes(want) ? 1 : 0.2;
+  }
+  const avail = /inactive/i.test(ctx.availability ?? "") ? 0.15 : !ctx.availability || /immedi/i.test(ctx.availability) ? 1 : /notice/i.test(ctx.availability) ? 0.6 : 0.4;
   return clamp01(salary * 0.4 + location * 0.35 + avail * 0.25);
 }
 

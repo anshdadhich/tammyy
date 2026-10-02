@@ -55,10 +55,3 @@ export interface JobReq {
 
 export type MatchLevel = "strong" | "partial" | "weak";
 
-export interface SubScores {
-  semantic: number;
-  skill: number;
-  depth: number;
-  constraints: number;
-  seniority: number;
-}

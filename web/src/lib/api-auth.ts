@@ -142,6 +142,21 @@ export function verifyEmailChangeToken(
   return verifyNonce(token, "email-change", candidateId, newEmail);
 }
 
+const EMAIL_OWNERSHIP_TTL_MS = 30 * 60 * 1000;
+
+/**
+ * Proof that the mailbox owner confirmed an address. Issued only by the
+ * verification endpoint after the emailed link is opened — never returned to
+ * the caller who requested verification.
+ */
+export function issueEmailOwnershipToken(email: string): string | null {
+  return issueNonce("email-ownership", "own", email, EMAIL_OWNERSHIP_TTL_MS);
+}
+
+export function verifyEmailOwnershipToken(token: string | undefined | null, email: string): boolean {
+  return verifyNonce(token, "email-ownership", "own", email);
+}
+
 export function clearSessionCookie(name: string): string {
   const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
   return `${name}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly;${secure}`;

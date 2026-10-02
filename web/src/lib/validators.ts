@@ -15,7 +15,7 @@ const emptyToUndefined = (v: unknown) =>
   typeof v === "string" && v.trim() === "" ? undefined : v;
 
 export const remotePrefSchema = z.enum(["onsite", "hybrid", "remote"]);
-export const salaryFrequencySchema = z.enum(["hourly", "monthly", "yearly"]);
+export const salaryFrequencySchema = z.enum(["hourly", "weekly", "monthly", "yearly"]);
 export const senioritySchema = z.enum([
   "intern",
   "junior",

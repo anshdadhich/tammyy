@@ -95,12 +95,18 @@ const load = cache(async (id: string): Promise<Bundle | null> => {
   if (xff) fwd["x-forwarded-for"] = xff;
   if (xri) fwd["x-real-ip"] = xri;
   const base = (process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000").replace(/\/+$/, "");
-  const res = await fetch(`${base}/api/candidates?id=${encodeURIComponent(id)}`, {
-    headers: fwd,
-    cache: "no-store",
-  });
-  if (!res.ok) return null;
-  return (await res.json()) as Bundle;
+  try {
+    const res = await fetch(`${base}/api/candidates?id=${encodeURIComponent(id)}`, {
+      headers: fwd,
+      cache: "no-store",
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`candidates fetch failed: ${res.status}`);
+    return (await res.json()) as Bundle;
+  } catch (e) {
+    console.error("[talent] profile load failed", e instanceof Error ? e.message : e);
+    throw e;
+  }
 });
 
 export async function generateMetadata({

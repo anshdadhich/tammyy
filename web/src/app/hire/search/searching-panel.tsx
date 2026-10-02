@@ -23,6 +23,10 @@ export default function SearchingPanel({ title }: { title: string }) {
   const [stage, setStage] = useState(0);
 
   useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      setStage(STAGES.length - 1);
+      return;
+    }
     const t = window.setInterval(() => {
       setStage((s) => (s >= STAGES.length - 1 ? s : s + 1));
     }, STAGE_TICK_MS);
@@ -44,7 +48,7 @@ export default function SearchingPanel({ title }: { title: string }) {
         This takes a few seconds — evidence is being read, not just keywords matched.
       </p>
 
-      <ul className="sq-stage-list text-left" aria-live="polite">
+      <ul className="sq-stage-list text-left">
         {STAGES.map((s, i) => (
           <li
             key={s.label}
@@ -65,6 +69,9 @@ export default function SearchingPanel({ title }: { title: string }) {
         ))}
       </ul>
 
+      <p className="sr-only" role="status">
+        Step {Math.min(stage + 1, STAGES.length)} of {STAGES.length}
+      </p>
       <div className="sq-bar" aria-hidden="true">
         <div
           className="sq-bar-fill"

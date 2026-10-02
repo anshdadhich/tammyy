@@ -189,7 +189,7 @@ export default function DitherCanvas({
       return;
     }
 
-    const buf = gl.createBuffer();
+    let buf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
     gl.bufferData(
       gl.ARRAY_BUFFER,
@@ -296,6 +296,14 @@ export default function DitherCanvas({
         enableFallback();
         return;
       }
+      // The old buffer object died with the context — rebuild and re-upload.
+      buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(
+        gl.ARRAY_BUFFER,
+        new Float32Array([-1, -1, 3, -1, -1, 3]),
+        gl.STATIC_DRAW
+      );
       resize();
       startLoop();
     };

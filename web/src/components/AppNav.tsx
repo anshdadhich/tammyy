@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { motion } from "motion/react";
+import { motion, useReducedMotion } from "motion/react";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { ViewerSession } from "@/lib/hr-session";
@@ -61,6 +61,7 @@ export default function AppNav({
   viewer: ViewerSession | null;
 }) {
   const router = useRouter();
+  const reduceMotion = useReducedMotion();
   const [menu, setMenu] = useState<"" | "auth" | "account">("");
   const [mobileOpen, setMobileOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -107,14 +108,18 @@ export default function AppNav({
     const onScroll = () => {
       const y = window.scrollY;
       headerRef.current?.classList.toggle("is-scrolled", y > 8);
-      headerRef.current?.classList.toggle("is-hidden", y > 140 && y > lastY + 2);
-      if (y < lastY - 2) headerRef.current?.classList.remove("is-hidden");
+      if (!mobileOpen) {
+        headerRef.current?.classList.toggle("is-hidden", y > 140 && y > lastY + 2);
+        if (y < lastY - 2) headerRef.current?.classList.remove("is-hidden");
+      } else {
+        headerRef.current?.classList.remove("is-hidden");
+      }
       lastY = y;
     };
     onScroll();
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
-  }, []);
+  }, [mobileOpen]);
 
 
   useEffect(() => {
@@ -143,10 +148,17 @@ export default function AppNav({
     setMobileOpen(false);
   };
 
+  const [loggingOut, setLoggingOut] = useState(false);
   const logout = async () => {
+    if (loggingOut) return;
+    setLoggingOut(true);
     closeAll();
-    await fetch("/api/auth/logout", { method: "POST" });
-    router.refresh();
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+      router.refresh();
+    } finally {
+      setLoggingOut(false);
+    }
   };
 
   const linkItems = items.map((it) => {
@@ -164,7 +176,7 @@ export default function AppNav({
             layoutId="site-nav-pill"
             className="site-nav-pill"
             initial={false}
-            transition={{ type: "spring", stiffness: 500, damping: 35 }}
+            transition={reduceMotion ? { duration: 0 } : { type: "spring", stiffness: 500, damping: 35 }}
             aria-hidden="true"
           />
         ) : null}

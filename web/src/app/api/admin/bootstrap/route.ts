@@ -23,12 +23,11 @@ export async function POST(request: Request) {
       { status: 403 },
     );
   }
-  const headerSecret = request.headers.get("x-bootstrap-secret") ?? "";
+  // Header-only: a body token would leak into request logs and proxies.
+  const provided = request.headers.get("x-bootstrap-secret") ?? "";
   const read = await readJsonBody(request, 4 * 1024);
   if (!read.ok) return read.response;
-  const body = read.body as { token?: unknown; email?: unknown } | null;
-  const bodySecret = typeof body?.token === "string" ? body.token : "";
-  const provided = headerSecret || bodySecret;
+  const body = read.body as { email?: unknown } | null;
   if (!provided || !secretsEqual(provided, requiredSecret)) {
     return Response.json({ error: "bootstrap closed - invalid token" }, { status: 403 });
   }
@@ -44,7 +43,11 @@ export async function POST(request: Request) {
     return Response.json({ error: "provide a valid email that has signed up first" }, { status: 400 });
   }
   const allowlisted = (process.env.BOOTSTRAP_ADMIN_EMAIL ?? "").toLowerCase().trim();
-  if (allowlisted && !secretsEqual(email, allowlisted)) {
+  if (!allowlisted) {
+    // Without a pinned admin email the secret promotes any row — require it.
+    return Response.json({ error: "bootstrap closed - server not configured" }, { status: 403 });
+  }
+  if (!secretsEqual(email, allowlisted)) {
     return Response.json({ error: "bootstrap closed for this email" }, { status: 403 });
   }
   const db = await getDb();

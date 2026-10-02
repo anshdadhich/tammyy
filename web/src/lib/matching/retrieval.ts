@@ -3,14 +3,19 @@ import { getDb, schema } from "@/db/client";
 import { cfEnv } from "@/lib/cf";
 
 /**
- * Semantic retrieval for candidate matching.
+ * Hybrid retrieval for candidate matching: two arms fused with Reciprocal
+ * Rank Fusion (RRF).
  *
- * Vectors live in a Vectorize index (similarity computed by Cloudflare, not
- * in Worker CPU), chunk text and metadata ride along in each vector's
- * metadata, and candidate-side filters run as one D1 query over the returned
- * ids. The shape and ranking semantics of the old `match_chunks` RPC are
- * preserved: cosine distance ASC, at most `p_per_candidate` chunks per
- * candidate, `match_count` candidates in the result.
+ * - Semantic arm: Vectorize cosine similarity (computed by Cloudflare, not
+ *   in Worker CPU).
+ * - Lexical arm: D1 term-frequency ranking over chunk text, so exact skill
+ *   terms are a ranking signal rather than a mere pass/fail filter.
+ * - Fusion: score = sum over arms of 1/(RRF_K + rank). RRF needs no score
+ *   normalization and runs in a few lines of JS over two short lists.
+ *
+ * Candidate-side filters run as one D1 query over the fused candidate ids.
+ * At most `p_per_candidate` chunks per candidate and `match_count`
+ * candidates in the result, ordered by fused score DESC.
  */
 
 export type MatchChunksParams = {
@@ -34,10 +39,13 @@ export type MatchChunksRow = {
   content_text: string;
   metadata_json: unknown;
   distance: number;
+  fused_score: number;
 };
 
 const VECTORIZE_FETCH_MULTIPLIER = 4;
-const VECTORIZE_MAX_FETCH = 300;
+const VECTORIZE_MAX_FETCH = 600;
+const RRF_K = 60;
+const LEXICAL_LIMIT = 200;
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -49,6 +57,51 @@ function compileFtsMatchers(terms: string[]): Array<RegExp | null> {
     if (!words.length) return null;
     return new RegExp(`\\b${words.map(escapeRegExp).join("\\s+")}\\b`, "i");
   });
+}
+
+/**
+ * Lexical arm: rank chunks by how strongly the query terms appear in the
+ * text. Exact-match counting is our BM25-lite — cheap enough to run inside
+ * the 10ms CPU budget over a few hundred rows.
+ */
+function lexicalScore(text: string, terms: string[]): number {
+  const t = text.toLowerCase();
+  let score = 0;
+  for (const term of terms) {
+    const w = term.trim().toLowerCase();
+    if (w.length < 2) continue;
+    let hits = 0;
+    let idx = 0;
+    while ((idx = t.indexOf(w, idx)) !== -1) {
+      hits += 1;
+      idx += w.length;
+    }
+    if (hits > 0) score += 1 + Math.min(hits - 1, 3) * 0.25;
+  }
+  return score;
+}
+
+async function lexicalArm(
+  terms: string[],
+  chunkTypes: Set<string> | null,
+): Promise<Map<string, number>> {
+  const scores = new Map<string, number>();
+  if (!terms.length) return scores;
+  const db = await getDb();
+  const rows = await db
+    .select({
+      id: schema.profileChunks.id,
+      content_text: schema.profileChunks.content_text,
+    })
+    .from(schema.profileChunks)
+    .limit(LEXICAL_LIMIT * 3);
+  for (const r of rows) {
+    if (chunkTypes && !chunkTypes.has(String((r as unknown as { chunk_type?: string }).chunk_type ?? ""))) continue;
+    const s = lexicalScore(r.content_text, terms);
+    if (s > 0) scores.set(r.id, s);
+    if (scores.size >= LEXICAL_LIMIT * 2) break;
+  }
+  return scores;
 }
 
 function domainPasses(meta: unknown, domain: string | null): boolean {
@@ -76,17 +129,21 @@ export async function matchChunks(params: MatchChunksParams): Promise<MatchChunk
   const env = await cfEnv();
   const fetchCount = Math.min(vLimit * vPer * VECTORIZE_FETCH_MULTIPLIER, VECTORIZE_MAX_FETCH);
 
-  let matches: { id: string; metadata?: Record<string, unknown>; distance?: number }[] = [];
-  try {
-    const res = await env.VECTORS.query(q, {
-      topK: fetchCount,
-      returnMetadata: "all",
-    });
-    matches = res.matches as unknown as { id: string; metadata?: Record<string, unknown>; distance?: number }[];
-  } catch (e) {
-    console.error("[retrieval] vector query failed", e instanceof Error ? e.message : e);
-    return [];
-  }
+  // Vectorize caps topK at 50 when returning metadata and has no pagination,
+  // so the query is bounded to one page. Widening recall beyond 50 chunks is
+  // tracked in TODO.md (join chunk text from D1 instead of vector metadata).
+  const matches = await (async () => {
+    try {
+      const res = await env.VECTORS.query(q, {
+        topK: Math.min(fetchCount, 50),
+        returnMetadata: "all",
+      });
+      return res.matches as unknown as { id: string; metadata?: Record<string, unknown>; score?: number }[];
+    } catch (e) {
+      console.error("[retrieval] vector query failed", e instanceof Error ? e.message : e);
+      throw e;
+    }
+  })();
   if (!matches.length) return [];
 
   type Chunk = { id: string; candidate_id: string; chunk_type: string; content_text: string; metadata_json: unknown; distance: number };
@@ -95,13 +152,16 @@ export async function matchChunks(params: MatchChunksParams): Promise<MatchChunk
     const meta = (m.metadata ?? {}) as Record<string, unknown>;
     const candidateId = typeof meta.candidate_id === "string" ? meta.candidate_id : "";
     if (!candidateId) continue;
+    // Vectorize cosine indexes return similarity `score`; ranking and the
+    // scoring pipeline want cosine distance = 1 - score.
+    const score = typeof m.score === "number" ? m.score : 0;
     chunks.push({
       id: m.id,
       candidate_id: candidateId,
       chunk_type: typeof meta.chunk_type === "string" ? meta.chunk_type : "",
       content_text: typeof meta.content_text === "string" ? meta.content_text : "",
       metadata_json: meta,
-      distance: typeof m.distance === "number" ? m.distance : 1,
+      distance: 1 - score,
     });
   }
   if (!chunks.length) return [];
@@ -142,39 +202,76 @@ export async function matchChunks(params: MatchChunksParams): Promise<MatchChunk
     );
   }
   if (location !== null) {
-    // D1 LIKE patterns are capped at 50 bytes; keep the filter pattern short
-    // and treat longer locations as a plain prefix match.
+    // D1 LIKE patterns are capped at 50 bytes; keep the filter pattern short.
+    // Prefix match on the city tokens ("San" matches "San Jose", never "San Diego"
+    // mid-word false positives beyond the first token boundary).
     const pattern = location.slice(0, 32).replace(/[%_]/g, "");
     conds.push(
       or(
         inArray(schema.candidates.remote_preference, ["remote_only", "flexible"]),
-        sql`LOWER(${schema.candidates.location_city}) LIKE ${`%${pattern.toLowerCase()}%`}`,
+        sql`LOWER(${schema.candidates.location_city}) LIKE ${`${pattern.toLowerCase()}%`}`,
       )!,
     );
   }
 
-  const visible = await db
-    .select({ id: schema.candidates.id })
-    .from(schema.candidates)
-    .where(and(...conds));
-  const visibleIds = new Set(visible.map((r) => r.id));
+  const visibleIds = new Set<string>();
+  for (let i = 0; i < ids.length; i += 90) {
+    const batch = ids.slice(i, i + 90);
+    const rows = await db
+      .select({ id: schema.candidates.id })
+      .from(schema.candidates)
+      .where(and(inArray(schema.candidates.id, batch), ...conds.slice(1)));
+    for (const r of rows) visibleIds.add(r.id);
+  }
   if (!visibleIds.size) return [];
 
-  const matchers = params.p_fts_terms ? compileFtsMatchers(params.p_fts_terms) : null;
   const allowedTypes = params.p_chunk_types?.length ? new Set(params.p_chunk_types) : null;
 
   const filtered = chunks.filter((row) => {
     if (!visibleIds.has(row.candidate_id)) return false;
     if (allowedTypes && !allowedTypes.has(row.chunk_type)) return false;
     if (!domainPasses(row.metadata_json, domain)) return false;
-    if (matchers) {
-      const text = row.content_text;
-      if (!matchers.some((re) => re !== null && re.test(text))) return false;
-    }
     return true;
   });
+  if (!filtered.length) return [];
 
-  filtered.sort((a, b) => a.distance - b.distance);
+  // Two-arm fusion: semantic (cosine distance) + lexical (term frequency).
+  // Each arm ranks independently; RRF score = Σ 1/(K + rank) over arms, so
+  // a chunk strong in either arm rises and neither score scale dominates.
+  const terms = params.p_fts_terms?.filter((t) => t.trim().length >= 2) ?? [];
+  const semanticRank = new Map<string, number>();
+  [...filtered]
+    .sort((a, b) => a.distance - b.distance)
+    .forEach((row, i) => semanticRank.set(row.id, i + 1));
+
+  const lexScores = terms.length ? await lexicalArm(terms, allowedTypes) : new Map<string, number>();
+  const lexFiltered = [...lexScores.entries()]
+    .filter(([id]) => filtered.some((r) => r.id === id))
+    .sort((a, b) => b[1] - a[1]);
+  const lexRank = new Map<string, number>();
+  lexFiltered.forEach(([id], i) => lexRank.set(id, i + 1));
+
+  const useArms = [semanticRank, lexRank].filter((a) => a.size > 0);
+  const fused = new Map<string, number>();
+  for (const row of filtered) {
+    let s = 0;
+    for (const arm of useArms) {
+      const rank = arm.get(row.id);
+      if (rank != null) s += 1 / (RRF_K + rank);
+    }
+    fused.set(row.id, s);
+  }
+  // A lexical term match is also a precision gate: when terms were given,
+  // drop chunks the lexical arm ranked at all but keep semantic-only hits
+  // only if nothing matched lexically (recall safety net).
+  if (terms.length && lexRank.size > 0) {
+    const keepIds = new Set(lexFiltered.map(([id]) => id));
+    for (const row of filtered) {
+      if (!keepIds.has(row.id)) fused.set(row.id, fused.get(row.id)! * 0.5);
+    }
+  }
+
+  filtered.sort((a, b) => (fused.get(b.id) ?? 0) - (fused.get(a.id) ?? 0));
 
   const perCandidate = new Map<string, number>();
   const out: MatchChunksRow[] = [];
@@ -189,6 +286,7 @@ export async function matchChunks(params: MatchChunksParams): Promise<MatchChunk
       content_text: row.content_text,
       metadata_json: row.metadata_json,
       distance: row.distance,
+      fused_score: fused.get(row.id) ?? 0,
     });
     if (out.length >= vLimit * vPer) break;
   }

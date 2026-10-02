@@ -7,6 +7,7 @@ import { clientIp, rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { hashPasswordRemote, passwordPolicyError, verifyPasswordRemote } from "@/lib/password";
 import { createSession, setSessionCookie } from "@/lib/session";
 import { normalizeEmail } from "@/lib/validators";
+import { verifyEmailOwnershipToken } from "@/lib/api-auth";
 
 /**
  * POST /api/auth/claim — set (or confirm) the password on a candidate
@@ -22,6 +23,10 @@ import { normalizeEmail } from "@/lib/validators";
 const bodySchema = z.object({
   email: z.string().trim().email().max(320),
   password: z.string().min(1).max(200),
+  // Ownership proof: a signed token issued only after the mailbox owner
+  // clicked the emailed link. Without it, anyone who knows the email could
+  // claim a pre-created identity row (account takeover).
+  token: z.string().min(16).max(2048).optional(),
 });
 
 function isUniqueViolation(e: unknown): boolean {
@@ -32,17 +37,23 @@ function isUniqueViolation(e: unknown): boolean {
 
 type ClaimOutcome = "ok" | "bad-password" | "suspended";
 
-/** Set-or-verify the password on an existing row. */
+/**
+ * Set-or-verify the password on an existing row. Only candidate-role rows may
+ * be claimed here (employer rows are created through the signup flow), and
+ * setting a password revokes all existing sessions for the user.
+ */
 async function claimRow(
   raw: typeof schema.users.$inferSelect,
   password: string,
 ): Promise<ClaimOutcome> {
+  if (raw.role !== "candidate") return "bad-password";
+  const db = await getDb();
   if (raw.password_hash) {
     if (!(await verifyPasswordRemote(password, raw.password_hash))) return "bad-password";
   } else {
     const password_hash = await hashPasswordRemote(password);
-    const db = await getDb();
     await db.update(schema.users).set({ password_hash }).where(eq(schema.users.id, raw.id));
+    await db.delete(schema.sessions).where(eq(schema.sessions.user_id, raw.id));
   }
   if (raw.status !== "active") return "suspended";
   return "ok";
@@ -77,6 +88,17 @@ export async function POST(request: Request): Promise<Response> {
     principal: email,
   });
   if (!emailLimit.ok) return rateLimitResponse(emailLimit.retryAfterMs);
+
+  const ownership = parsed.data.token ?? "";
+  if (!verifyEmailOwnershipToken(ownership, email)) {
+    return Response.json(
+      {
+        error: "Confirm this email first — we'll send you a verification link.",
+        code: "verify_email",
+      },
+      { status: 403 },
+    );
+  }
 
   const db = await getDb();
   try {

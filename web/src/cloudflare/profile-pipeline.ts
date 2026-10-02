@@ -1,6 +1,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { eq, inArray } from "drizzle-orm";
 import { getDb, schema } from "@/db/client";
+import { setRuntimeEnv } from "@/lib/cf";
 import { generateCandidateSummary, analyzeProjectDepth } from "@/lib/ai";
 import { embedTexts } from "@/lib/embeddings";
 import { upsertChunkVector } from "@/lib/matching/retrieval";
@@ -71,8 +72,34 @@ export function buildChunks(input: {
   return base.filter((c) => c.content_text.replace(/\W+/g, "").length > 10);
 }
 
+const SECRET_KEYS = [
+  "RESEND_API_KEY",
+  "RESEND_FROM",
+  "OPENROUTER_API_KEY",
+  "OPENROUTER_BASE_URL",
+  "JUDGE_MODEL",
+  "CHEAP_MODEL",
+  "SESSION_SECRET",
+  "BOOTSTRAP_SECRET",
+  "NEXT_PUBLIC_SITE_URL",
+] as const;
+
+function populateSecrets(env: Record<string, string | undefined>): void {
+  for (const k of SECRET_KEYS) {
+    const v = env[k];
+    if (typeof v === "string" && v.length > 0 && !process.env[k]) {
+      process.env[k] = v;
+    }
+  }
+}
+
 export class ProfilePipelineWorkflow extends WorkflowEntrypoint<Env, Params> {
   async run(event: WorkflowEvent<Params>, step: WorkflowStep): Promise<void> {
+    // Workflow steps run outside the request path: no OpenNext context, no
+    // populated process.env. Publish this.env so the data layer, embeddings,
+    // and secret reads resolve.
+    setRuntimeEnv(this.env as unknown as CloudflareEnv);
+    populateSecrets(this.env as unknown as Record<string, string | undefined>);
     const candidateId = event.payload.candidateId;
 
     const bundle: {

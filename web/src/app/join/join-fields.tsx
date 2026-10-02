@@ -239,6 +239,7 @@ export function ChipPicker({
         onKeyDown={(event) => {
           if (event.key === "Enter") {
             event.preventDefault();
+            event.stopPropagation();
             add(query);
           }
         }}

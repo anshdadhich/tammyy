@@ -104,6 +104,7 @@ export default function LoginForm({ initialStage = "signin" }: { initialStage?: 
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
   const [companyName, setCompanyName] = useState("");
   const [companyEmail, setCompanyEmail] = useState("");
   const [website, setWebsite] = useState("");
@@ -274,7 +275,7 @@ export default function LoginForm({ initialStage = "signin" }: { initialStage?: 
                 type="button"
                 className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-muted hover:text-body"
                 aria-label={showPassword ? "Hide password" : "Show password"}
-                tabIndex={-1}
+                tabIndex={0}
                 onClick={() => setShowPassword((v) => !v)}
               >
                 {eyeIcon}
@@ -289,7 +290,7 @@ export default function LoginForm({ initialStage = "signin" }: { initialStage?: 
             <input
               id="hr-confirm-password"
               className="input"
-              type={showPassword ? "text" : "password"}
+              type={showConfirm ? "text" : "password"}
               value={confirm}
               onChange={(e) => setConfirm(e.target.value)}
               placeholder="Re-enter your password"
@@ -471,7 +472,7 @@ export default function LoginForm({ initialStage = "signin" }: { initialStage?: 
               type="button"
               className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-muted hover:text-body"
               aria-label={showPassword ? "Hide password" : "Show password"}
-              tabIndex={-1}
+              tabIndex={0}
               onClick={() => setShowPassword((v) => !v)}
             >
               {eyeIcon}

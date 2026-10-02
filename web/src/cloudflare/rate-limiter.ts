@@ -17,8 +17,14 @@ export class RateLimiter extends DurableObject<CloudflareEnv> {
     if (!this.buckets) {
       const buckets = new Map<string, Bucket>();
       const entries = await this.ctx.storage.kv.list({ prefix: "rl:" });
+      const now = Date.now();
       for (const [k, v] of entries) {
-        buckets.set(k.slice(3), v as unknown as Bucket);
+        const b = v as unknown as Bucket;
+        if (b?.resetAt && now >= b.resetAt) {
+          await this.ctx.storage.kv.delete(k);
+          continue;
+        }
+        buckets.set(k.slice(3), b);
       }
       this.buckets = buckets;
     }
@@ -40,7 +46,14 @@ export class RateLimiter extends DurableObject<CloudflareEnv> {
     try {
       op = (await request.json()) as ConsumeOp;
     } catch {
-      return Response.json({ ok: true, remaining: 0, retryAfterMs: 0 });
+      return Response.json({ ok: false, remaining: 0, retryAfterMs: 30_000 });
+    }
+    if (
+      typeof op?.key !== "string" || op.key.length < 1 || op.key.length > 200 ||
+      typeof op?.limit !== "number" || !Number.isFinite(op.limit) || op.limit < 1 || op.limit > 100_000 ||
+      typeof op?.windowMs !== "number" || !Number.isFinite(op.windowMs) || op.windowMs < 1_000 || op.windowMs > 24 * 60 * 60_000
+    ) {
+      return Response.json({ ok: false, remaining: 0, retryAfterMs: 30_000 });
     }
     const now = Date.now();
     const buckets = await this.load();

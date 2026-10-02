@@ -43,7 +43,9 @@ export async function verifyPassword(password: string, stored: string | null | u
   const r = Number(rStr);
   const p = Number(pStr);
   if (!Number.isInteger(n) || !Number.isInteger(r) || !Number.isInteger(p)) return false;
-  if (n <= 1 || (n & (n - 1)) !== 0 || r < 1 || p < 1) return false;
+  // Bound stored params so a crafted hash can't burn unbounded CPU.
+  if (n <= 1 || (n & (n - 1)) !== 0 || n > 32768) return false;
+  if (r < 1 || r > 16 || p < 1 || p > 8) return false;
   if (!/^[0-9a-f]+$/i.test(saltHex) || !/^[0-9a-f]+$/i.test(hashHex)) return false;
   if (hashHex.length === 0 || hashHex.length % 2 !== 0) return false;
   try {

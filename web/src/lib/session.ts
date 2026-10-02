@@ -21,7 +21,8 @@ export function sessionCookieOptions(expires: Date): {
 } {
   return {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    // Secure outside explicit local dev; NODE_ENV may be unset on Workers.
+    secure: process.env.NODE_ENV !== "development",
     sameSite: "lax",
     path: "/",
     expires,

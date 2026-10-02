@@ -336,6 +336,7 @@ export default function JoinWizard() {
     setFormError("");
   }, []);
 
+  const showDevTools = process.env.NODE_ENV !== "production";
   const autofill = useCallback(() => {
     setDraft((current) => {
       const merged: Draft = { ...current };
@@ -472,20 +473,19 @@ export default function JoinWizard() {
       const bad = payloadErrors(parsed.error);
       const target = stepForKey(Object.keys(bad)[0] ?? "");
       if (target === 7) {
+        goTo(7);
         setErrors(accountErrors);
         setFormError(
           "Some details are still incomplete - check the highlighted fields.",
         );
-        goTo(7);
-        setErrors(accountErrors);
         return;
       }
       const targetErrors = validateStep(target, draft);
+      goTo(target);
+      setErrors(targetErrors);
       setFormError(
         "Some details are still incomplete - check the highlighted fields.",
       );
-      goTo(target);
-      setErrors(targetErrors);
       return;
     }
     setPending(true);
@@ -724,6 +724,7 @@ export default function JoinWizard() {
               </h2>
               <p className="mt-1.5 text-[14.5px] text-muted">{title.sub}</p>
             </div>
+{showDevTools && (
             <button
               type="button"
               className="btn-link flex items-center gap-1.5"
@@ -748,6 +749,7 @@ export default function JoinWizard() {
               </svg>
               Autofill test data
             </button>
+)}
           </div>
 
           {renderStep()}
