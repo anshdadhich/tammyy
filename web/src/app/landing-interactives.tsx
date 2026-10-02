@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { motion } from "motion/react";
 import DitherCanvas from "@/components/DitherCanvas";
 
 const CHECKLIST_STEPS = [
@@ -51,8 +52,6 @@ export function HeroDemo() {
   const [statuses, setStatuses] = useState<StepStatus[]>(INITIAL_STATUSES);
   const runningRef = useRef(false);
   const timerRef = useRef<number | null>(null);
-  const switcherRef = useRef<HTMLDivElement>(null);
-  const pillReadyRef = useRef(false);
   const rotateRef = useRef<number | null>(null);
   const pauseTicksRef = useRef(0);
 
@@ -63,32 +62,6 @@ export function HeroDemo() {
     };
   }, []);
 
-  // One gliding pill tracks the active mode button.
-  useEffect(() => {
-    const container = switcherRef.current;
-    const pill = container?.querySelector<HTMLElement>(".match-mode-pill");
-    if (!container || !pill) return;
-    const move = () => {
-      const target = container.querySelector<HTMLElement>(
-        `[data-mode-item="${mode}"]`,
-      );
-      if (!target) return;
-      pill.style.opacity = "1";
-      pill.style.width = `${target.offsetWidth}px`;
-      pill.style.transform = `translateX(${target.offsetLeft}px)`;
-      if (!pillReadyRef.current) {
-        pill.style.transition = "none";
-        pill.getBoundingClientRect();
-        pill.style.transition = "";
-        pillReadyRef.current = true;
-      }
-    };
-    move();
-    const ro = new ResizeObserver(move);
-    ro.observe(container);
-    document.fonts?.ready.then(() => move()).catch(() => {});
-    return () => ro.disconnect();
-  }, [mode]);
 
   // Auto-rotate the hero mode every 4.5s unless the visitor took over
   // recently (3 idle ticks ≈ 13s), the tab is hidden, or motion is reduced.
@@ -209,20 +182,27 @@ export function HeroDemo() {
 
         <div className="lg:col-span-2 lg:pt-1">
           <div className="match-controls">
-            <div className="match-mode-switcher" ref={switcherRef}>
-              <span className="match-mode-pill" aria-hidden="true" />
+            <div className="match-mode-switcher">
               {MATCH_MODES.map((m) => {
                 const active = mode === m.key;
                 return (
                   <button
                     key={m.key}
                     type="button"
-                    data-mode-item={m.key}
                     className={`match-mode${active ? " is-active" : ""}`}
                     aria-pressed={active}
                     onClick={() => selectMode(m.key)}
                   >
-                    {m.label}
+                    {active ? (
+                      <motion.span
+                        layoutId="match-mode-pill"
+                        className="match-mode-pill"
+                        initial={false}
+                        transition={{ type: "spring", stiffness: 500, damping: 35 }}
+                        aria-hidden="true"
+                      />
+                    ) : null}
+                    <span style={{ position: "relative" }}>{m.label}</span>
                   </button>
                 );
               })}

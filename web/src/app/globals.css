@@ -202,13 +202,6 @@ button, input { font: inherit; }
   transition: color 160ms var(--ease-out);
 }
 .match-mode.is-active { color: var(--ink); font-weight: 600; }
-.match-mode-pill {
-  position: absolute;
-  inset: 0;
-  border-radius: 999px;
-  background: var(--surface);
-  box-shadow: var(--shadow-sm);
-}
 .match-run {
   display: inline-flex;
   width: 40px;
@@ -2050,14 +2043,10 @@ details.judge[open] summary > svg:last-child { transform: rotate(180deg); }
 .site-nav-links { position: relative; }
 .site-nav-pill {
   position: absolute;
-  top: 4px;
-  left: 0;
-  height: 34px;
-  width: 0;
+  inset: 0;
   border-radius: 999px;
   background: var(--surface);
   box-shadow: var(--shadow-sm);
-  transition: transform 320ms var(--ease-out), width 320ms var(--ease-out);
   pointer-events: none;
 }
 .site-nav-link.is-active { color: var(--ink); font-weight: 600; }
@@ -2170,12 +2159,11 @@ details.judge[open] summary > svg:last-child { transform: rotate(180deg); }
    --------------------------------------------------------------- */
 .match-mode-switcher { position: relative; }
 .match-mode-pill {
-  top: 4px;
-  left: 0;
-  inset: auto;
-  height: 32px;
-  width: 0;
-  transition: transform 320ms var(--ease-out), width 320ms var(--ease-out);
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
   pointer-events: none;
 }
 .spin {

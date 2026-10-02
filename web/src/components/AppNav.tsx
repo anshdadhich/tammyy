@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { motion } from "motion/react";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { ViewerSession } from "@/lib/hr-session";
@@ -93,40 +94,6 @@ export default function AppNav({
   }, [menu]);
 
   const items = NAV_ITEMS[variant];
-  const linksRef = useRef<HTMLDivElement>(null);
-  const pillReadyRef = useRef(false);
-  useEffect(() => {
-    const container = linksRef.current;
-    const pill = container?.querySelector<HTMLElement>(".site-nav-pill");
-    if (!container || !pill) return;
-    const move = () => {
-      const target = container.querySelector<HTMLElement>(
-        `[data-nav-item="${CSS.escape(active ?? "")}"]`,
-      );
-      if (!target) {
-        pill.style.opacity = "0";
-        pill.style.width = "0px";
-        return;
-      }
-      pill.style.opacity = "1";
-      pill.style.width = `${target.offsetWidth}px`;
-      pill.style.transform = `translateX(${target.offsetLeft}px)`;
-      if (!pillReadyRef.current) {
-        // First placement snaps without a glide-from-zero; every later
-        // move animates via the CSS transition.
-        pill.style.transition = "none";
-        pill.getBoundingClientRect();
-        pill.style.transition = "";
-        pillReadyRef.current = true;
-      }
-    };
-    move();
-    const ro = new ResizeObserver(move);
-    ro.observe(container);
-    // Web fonts change link widths after first paint — re-measure when ready.
-    document.fonts?.ready.then(() => move()).catch(() => {});
-    return () => ro.disconnect();
-  }, [active, items]);
 
   const showLogin = !viewer && variant !== "join";
   const showSearch = viewer !== null && viewer.kind === "hr" && !viewer.isAdmin;
@@ -148,12 +115,20 @@ export default function AppNav({
       <Link
         key={it.href}
         href={it.href}
-        data-nav-item={it.href}
         className={`site-nav-link press${isActive ? " is-active" : ""}`}
         aria-current={isActive ? "page" : undefined}
         onClick={closeAll}
       >
-        {it.label}
+        {isActive ? (
+          <motion.span
+            layoutId="site-nav-pill"
+            className="site-nav-pill"
+            initial={false}
+            transition={{ type: "spring", stiffness: 500, damping: 35 }}
+            aria-hidden="true"
+          />
+        ) : null}
+        <span style={{ position: "relative" }}>{it.label}</span>
       </Link>
     );
   });
@@ -179,10 +154,7 @@ export default function AppNav({
           Tammy
         </Link>
         <nav aria-label="Main navigation" className="site-navigation hidden lg:flex">
-          <div className="site-nav-links" ref={linksRef}>
-            <span className="site-nav-pill" aria-hidden="true" />
-            {linkItems}
-          </div>
+          <div className="site-nav-links">{linkItems}</div>
         </nav>
         <div className="site-nav-actions">
           {viewer && (
