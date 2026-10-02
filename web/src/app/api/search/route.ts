@@ -548,7 +548,7 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
         }
         chunkTechByCand.set(c.candidate_id, arr);
       }
-      const [skillDocs, projDocs] = await Promise.all([
+      const [skillDocs, projDocs, ossDocs] = await Promise.all([
         db
           .select({
             candidate_id: schema.candidateSkills.candidate_id,
@@ -564,7 +564,17 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
           })
           .from(schema.projects)
           .where(inArray(schema.projects.candidate_id, scoreIds)),
+        db
+          .select({
+            candidate_id: schema.openSourceContributions.candidate_id,
+          })
+          .from(schema.openSourceContributions)
+          .where(inArray(schema.openSourceContributions.candidate_id, scoreIds)),
       ]);
+      const ossByCand = new Map<string, number>();
+      for (const o of ossDocs) {
+        ossByCand.set(o.candidate_id, (ossByCand.get(o.candidate_id) ?? 0) + 1);
+      }
       const skillIds = [...new Set(skillDocs.map((s) => s.skill_id).filter(Boolean))];
       const skillNameById = new Map<string, string>();
       if (skillIds.length) {
@@ -631,6 +641,13 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
             locationCity: typeof r.location_city === "string" ? r.location_city : null,
             availability: typeof r.availability_status === "string" ? r.availability_status : null,
             profileStrength: typeof r.profile_strength === "number" ? r.profile_strength : null,
+            ossContributions: ossByCand.get(cid) ?? 0,
+            lastUpdatedIso:
+              typeof r.updated_at === "string"
+                ? r.updated_at
+                : typeof r.freshness_updated_at === "string"
+                  ? r.freshness_updated_at
+                  : null,
           };
           const dist = typeof r.best_distance === "number" ? r.best_distance : null;
           const { sub, total, level } = scoreCandidate(jobReq, dist, ctx);
@@ -758,7 +775,7 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
   try {
     const top = rows.slice(0, 10);
     const topIds = top.map((r) => String(r.id ?? "")).filter((s): s is string => s.length > 0);
-    const [judgeCands, judgeProjs] = await Promise.all([
+    const [judgeCands, judgeProjs, judgeExps, judgeDepths] = await Promise.all([
       topIds.length
         ? db
             .select({
@@ -793,10 +810,51 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
             .from(schema.projects)
             .where(inArray(schema.projects.candidate_id, topIds))
         : Promise.resolve([] as Record<string, unknown>[]),
+      topIds.length
+        ? db
+            .select({
+              candidate_id: schema.workExperiences.candidate_id,
+              company_name: schema.workExperiences.company_name,
+              job_title: schema.workExperiences.job_title,
+              achievements: schema.workExperiences.achievements,
+              tech_stack: schema.workExperiences.tech_stack,
+            })
+            .from(schema.workExperiences)
+            .where(inArray(schema.workExperiences.candidate_id, topIds))
+            .limit(topIds.length * MAX_EXP_ATTACH)
+        : Promise.resolve([] as Record<string, unknown>[]),
+      topIds.length
+        ? db
+            .select({
+              project_id: schema.projectDepthAnalysis.project_id,
+              complexity_score: schema.projectDepthAnalysis.complexity_score,
+              technical_complexity: schema.projectDepthAnalysis.technical_complexity,
+              evidence_quality: schema.projectDepthAnalysis.evidence_quality,
+              autonomy_level: schema.projectDepthAnalysis.autonomy_level,
+            })
+            .from(schema.projectDepthAnalysis)
+        : Promise.resolve([] as Record<string, unknown>[]),
     ]);
     const candById = new Map(
       (judgeCands as unknown as Record<string, unknown>[]).map((c) => [String(c.id), c]),
     );
+    const expsById = new Map<string, Record<string, unknown>[]>();
+    for (const e of (judgeExps as unknown as Record<string, unknown>[]) ?? []) {
+      const cid = String(e.candidate_id ?? "");
+      if (!cid) continue;
+      const bucket = expsById.get(cid) ?? [];
+      if (bucket.length < MAX_EXP_ATTACH) {
+        const rest = { ...e };
+        delete rest.candidate_id;
+        bucket.push(rest);
+      }
+      expsById.set(cid, bucket);
+    }
+    const depthByProjJudge = new Map<string, Record<string, unknown>>();
+    for (const d of (judgeDepths as unknown as Record<string, unknown>[]) ?? []) {
+      const pid = String(d.project_id ?? "");
+      if (pid) depthByProjJudge.set(pid, d);
+    }
     const projsById = new Map<string, Record<string, unknown>[]>();
     for (const p of judgeProjs as unknown as Record<string, unknown>[]) {
       const cid = String(p.candidate_id ?? "");
@@ -805,13 +863,27 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
       if (bucket.length < MAX_PROJECTS_DEEP) {
         const rest = { ...p };
         delete rest.candidate_id;
+        const depth = depthByProjJudge.get(String(p.id ?? ""));
+        if (depth) {
+          const d = { ...depth };
+          delete d.project_id;
+          rest.depth_analysis = d;
+        }
         bucket.push(rest);
       }
       projsById.set(cid, bucket);
     }
     const inputs: JudgeInput[] = top.map((r) => {
       const cid = String(r.id ?? "");
-      return { candidate_id: cid, job: jobReq, candidateJson: { candidate: candById.get(cid) ?? r, projects: projsById.get(cid) ?? [] } };
+      return {
+        candidate_id: cid,
+        job: jobReq,
+        candidateJson: {
+          candidate: candById.get(cid) ?? r,
+          work_experiences: expsById.get(cid) ?? [],
+          projects: projsById.get(cid) ?? [],
+        },
+      };
     });
     let timer: ReturnType<typeof setTimeout> | undefined;
     const judged = (await Promise.race([

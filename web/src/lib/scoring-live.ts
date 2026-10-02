@@ -6,6 +6,7 @@ export interface SubScores {
   depth: number;
   constraints: number;
   seniority: number;
+  freshness: number;
 }
 
 export interface ScoreContext {
@@ -19,6 +20,8 @@ export interface ScoreContext {
   locationCity: string | null;
   availability: string | null;
   profileStrength: number | null;
+  ossContributions?: number;
+  lastUpdatedIso?: string | null;
 }
 
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
@@ -26,6 +29,7 @@ const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
 export function annualize(amount: number, freq: string | null | undefined): number {
   const f = (freq ?? "").toLowerCase();
   if (f === "monthly") return amount * 12;
+  if (f === "weekly") return amount * 52;
   if (f === "hourly") return amount * 2080;
   return amount;
 }
@@ -62,11 +66,15 @@ export function skillScore(job: JobReq, ctx: ScoreContext): number {
 const EVIDENCE_MAP: Record<string, number> = { weak: 0.3, moderate: 0.65, strong: 1 };
 
 export function depthScore(ctx: ScoreContext): number {
-  if (!ctx.depths.length) return 0.3;
+  const oss = ossScore(ctx);
+  if (!ctx.depths.length) {
+    // No analyzed projects — OSS evidence alone can still carry depth.
+    return oss > 0 ? clamp01(0.3 * 0.6 + oss * 0.4) : 0.3;
+  }
   const avg = ctx.depths.reduce((a, d) => a + clamp01(d.complexity / 10), 0) / ctx.depths.length;
   const ev = ctx.depths.reduce((a, d) => a + (EVIDENCE_MAP[d.evidence] ?? 0.5), 0) / ctx.depths.length;
   const quality = clamp01((ctx.profileStrength ?? 50) / 100);
-  return clamp01(avg * 0.5 + ev * 0.35 + quality * 0.15);
+  return clamp01(avg * 0.42 + ev * 0.3 + quality * 0.13 + oss * 0.15);
 }
 
 export function constraintsScore(job: JobReq, ctx: ScoreContext): number {
@@ -94,7 +102,33 @@ export function seniorityScore(job: JobReq, ctx: ScoreContext): number {
   return 1;
 }
 
-export const WEIGHTS = { semantic: 0.25, skill: 0.25, depth: 0.2, constraints: 0.15, seniority: 0.1 };
+/**
+ * Recency of the candidate's last profile update. Fresh profiles get a mild
+ * boost; untouched ones decay slowly, so staleness can't pin the top forever.
+ * 1 = updated within ~2 weeks, 0.35 floor after ~9 months.
+ */
+export function freshnessScore(ctx: ScoreContext): number {
+  if (!ctx.lastUpdatedIso) return 0.6;
+  const t = Date.parse(ctx.lastUpdatedIso);
+  if (!Number.isFinite(t)) return 0.6;
+  const ageDays = (Date.now() - t) / 86_400_000;
+  if (ageDays <= 14) return 1;
+  if (ageDays <= 120) return clamp01(1 - ((ageDays - 14) / 106) * 0.35);
+  return clamp01(0.65 - ((ageDays - 120) / 150) * 0.3);
+}
+
+/**
+ * Open-source contribution signal: public reviewable work is among the
+ * strongest quality evidence for engineering candidates, so it feeds the
+ * depth subscore alongside project complexity.
+ */
+export function ossScore(ctx: ScoreContext): number {
+  const n = ctx.ossContributions ?? 0;
+  if (n <= 0) return 0;
+  return clamp01(0.25 + Math.min(n, 4) * 0.15);
+}
+
+export const WEIGHTS = { semantic: 0.25, skill: 0.25, depth: 0.2, constraints: 0.15, seniority: 0.1, freshness: 0.05 };
 
 export function finalScore(sub: SubScores): number {
   return Math.round(
@@ -102,7 +136,8 @@ export function finalScore(sub: SubScores): number {
       sub.skill * WEIGHTS.skill +
       sub.depth * WEIGHTS.depth +
       sub.constraints * WEIGHTS.constraints +
-      sub.seniority * WEIGHTS.seniority) *
+      sub.seniority * WEIGHTS.seniority +
+      sub.freshness * WEIGHTS.freshness) *
       100,
   );
 }
@@ -120,6 +155,7 @@ export function scoreCandidate(job: JobReq, distance: number | null, ctx: ScoreC
     depth: depthScore(ctx),
     constraints: constraintsScore(job, ctx),
     seniority: seniorityScore(job, ctx),
+    freshness: freshnessScore(ctx),
   };
   const total = finalScore(sub);
   return { sub, total, level: matchLevel(total) };

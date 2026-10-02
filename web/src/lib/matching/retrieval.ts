@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import { getDb, schema } from "@/db/client";
 import { cfEnv } from "@/lib/cf";
 
@@ -128,10 +128,16 @@ export async function matchChunks(params: MatchChunksParams): Promise<MatchChunk
     );
   }
   if (params.p_salary_max != null) {
+    // Annualize before comparing — candidates store monthly/weekly/hourly
+    // frequencies and job salary_max is annual (mirrors scoring's annualize()).
     conds.push(
       or(
         sql`${schema.candidates.min_salary} IS NULL`,
-        lte(schema.candidates.min_salary, params.p_salary_max),
+        sql`${schema.candidates.min_salary} * (CASE LOWER(${schema.candidates.salary_frequency})
+             WHEN 'monthly' THEN 12
+             WHEN 'weekly' THEN 52
+             WHEN 'hourly' THEN 2080
+             ELSE 1 END) <= ${params.p_salary_max}`,
       )!,
     );
   }
