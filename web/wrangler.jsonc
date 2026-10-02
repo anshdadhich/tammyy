@@ -34,7 +34,7 @@
   "vectorize": [
     {
       "binding": "VECTORS",
-      "index_name": "tammy-profile-chunks"
+      "index_name": "tammy-profile-chunks-512"
     }
   ],
   "ai": {

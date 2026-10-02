@@ -1,9 +1,17 @@
 import { cfEnv } from "@/lib/cf";
 
-export const EMBEDDING_MODEL = "@cf/baai/bge-small-en-v1.5";
-export const EMBEDDING_DIM = 384;
+// qwen3-embedding-0.6b is Matryoshka-trained (MRL): its 1024-dim output can
+// be safely truncated to a 512-dim prefix with graceful quality loss. This
+// halves Vectorize storage versus 1024d while keeping m3-tier recall.
+export const EMBEDDING_MODEL = "@cf/qwen/qwen3-embedding-0.6b";
+export const EMBEDDING_DIM = 512;
+const NATIVE_DIM = 1024;
 export const EMBEDDING_TIMEOUT_MS = 20_000;
 const MAX_BATCH = 100;
+
+function truncateMrl(vec: number[]): number[] {
+  return vec.length === EMBEDDING_DIM ? vec : vec.slice(0, EMBEDDING_DIM);
+}
 
 function assertEmbeddingDim(vec: unknown, expected = EMBEDDING_DIM): asserts vec is number[] {
   if (!Array.isArray(vec) || vec.length !== expected) {
@@ -32,8 +40,14 @@ async function embedBatch(texts: string[]): Promise<number[][]> {
   if (!parsed?.data || parsed.data.length !== texts.length) {
     throw new Error("embedding response malformed");
   }
-  for (const vec of parsed.data) assertEmbeddingDim(vec);
-  return parsed.data;
+  return parsed.data.map((raw) => {
+    if (!Array.isArray(raw) || (raw.length !== NATIVE_DIM && raw.length !== EMBEDDING_DIM)) {
+      throw new Error(`unexpected embedding width: ${Array.isArray(raw) ? raw.length : typeof raw}`);
+    }
+    const vec = truncateMrl(raw);
+    assertEmbeddingDim(vec);
+    return vec;
+  });
 }
 
 export async function embedTexts(texts: string[]): Promise<number[][]> {
