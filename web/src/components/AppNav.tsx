@@ -8,14 +8,18 @@ import type { ViewerSession } from "@/lib/hr-session";
 import { toggleTheme } from "@/lib/theme";
 
 type Variant = "landing" | "join" | "hire";
+type NavItem = { label: string; href: string };
 
-const NAV_ITEMS: Record<Variant, { label: string; href: string }[]> = {
-  landing: [
-    { label: "Candidates", href: "/#candidates" },
-    { label: "Employers", href: "/hire" },
-    { label: "Match engine", href: "/#engine" },
-    { label: "FAQ", href: "/#faq" },
-  ],
+/** Same nav for every page while logged out. */
+const PUBLIC_NAV: NavItem[] = [
+  { label: "Candidates", href: "/#candidates" },
+  { label: "Employers", href: "/hire" },
+  { label: "Match engine", href: "/#engine" },
+  { label: "FAQ", href: "/#faq" },
+];
+
+const NAV_ITEMS: Record<Variant, NavItem[]> = {
+  landing: PUBLIC_NAV,
   join: [
     { label: "Home", href: "/" },
     { label: "Build my page", href: "/join" },
@@ -61,6 +65,42 @@ export default function AppNav({
   const [mobileOpen, setMobileOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLElement>(null);
+  const [spyActive, setSpyActive] = useState<string | null>(null);
+
+  // Scroll-spy for pages with landing sections (Candidates/Match engine/FAQ):
+  // the pill follows whichever section is under the reading line. Pages
+  // without those sections keep the static `active` prop.
+  useEffect(() => {
+    const sections = (["candidates", "engine", "faq"] as const)
+      .map((id) => ({ href: `/#${id}`, el: document.getElementById(id) }))
+      .filter((s): s is { href: string; el: HTMLElement } => s.el !== null);
+    if (!sections.length) return;
+    let raf = 0;
+    const update = () => {
+      raf = 0;
+      const line = window.scrollY + 140;
+      // First section is the default, so the hero region keeps the pill on
+      // Candidates (matching the SSR pin) and it only moves from there.
+      let current: string = sections[0].href;
+      for (const s of sections) {
+        if (s.el.offsetTop <= line) current = s.href;
+      }
+      setSpyActive(current);
+    };
+    const schedule = () => {
+      if (!raf) raf = requestAnimationFrame(update);
+    };
+    update();
+    window.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("resize", schedule);
+    return () => {
+      window.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", schedule);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, []);
+
+  const effectiveActive = spyActive ?? active;
 
   useEffect(() => {
     let lastY = window.scrollY;
@@ -93,9 +133,9 @@ export default function AppNav({
     };
   }, [menu]);
 
-  const items = NAV_ITEMS[variant];
+  const items = viewer ? NAV_ITEMS[variant] : PUBLIC_NAV;
 
-  const showLogin = !viewer && variant !== "join";
+  const showLogin = !viewer;
   const showSearch = viewer !== null && viewer.kind === "hr" && !viewer.isAdmin;
 
   const closeAll = () => {
@@ -110,7 +150,7 @@ export default function AppNav({
   };
 
   const linkItems = items.map((it) => {
-    const isActive = active === it.href;
+    const isActive = effectiveActive === it.href;
     return (
       <Link
         key={it.href}
@@ -134,7 +174,7 @@ export default function AppNav({
   });
 
   const mobileItems = items.map((it) => {
-    const isActive = active === it.href;
+    const isActive = effectiveActive === it.href;
     return (
       <Link
         key={it.href}

@@ -16,7 +16,7 @@ export default async function AdminPage() {
   }
 
   return (
-    <PageShell variant="landing" active="/#candidates" viewer={viewer}>
+    <PageShell variant="landing" viewer={viewer}>
       <section className="pt-20 lg:pt-28 pb-24">
         <div className="max-w-[1160px] mx-auto px-6">
           <p className="meta-chip">Admin</p>

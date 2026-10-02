@@ -600,7 +600,7 @@ export default async function TalentPage({
     );
 
   return (
-    <PageShell variant="landing" active="/#candidates" viewer={viewer}>
+    <PageShell variant="landing" viewer={viewer}>
       <section className="pt-20 lg:pt-28 pb-8">
         <div className="max-w-[1160px] mx-auto px-6">
           <div

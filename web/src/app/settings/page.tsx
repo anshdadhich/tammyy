@@ -15,7 +15,7 @@ export default async function SettingsPage() {
   const hr = await readHrSession();
 
   return (
-    <PageShell variant="landing" active="/#candidates" viewer={viewer}>
+    <PageShell variant="landing" viewer={viewer}>
       <h1 className="sr-only">Settings</h1>
       <section className="pt-12 lg:pt-16 pb-24">
         <div className="max-w-[1160px] mx-auto px-6">
