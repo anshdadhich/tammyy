@@ -31,6 +31,7 @@ type Cand = {
   github_url?: string | null;
   resume_url?: string | null;
   portfolio_url?: string | null;
+  photo_url?: string | null;
   freshness_updated_at?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
@@ -78,6 +79,12 @@ type SkillLink = {
   skills?: { name?: string | null } | null;
 };
 
+type Depth = {
+  complexity_score?: number | null;
+  evidence_quality?: string | null;
+  technical_complexity?: string | null;
+};
+
 type Bundle = {
   candidate: Cand;
   profile: Prof;
@@ -85,6 +92,7 @@ type Bundle = {
   experiences: Exp[];
   education: Edu[];
   skills: SkillLink[];
+  depths?: Record<string, Depth>;
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -625,13 +633,24 @@ export default async function TalentPage({
             style={{ "--d": "160ms" } as React.CSSProperties}
           >
             <div className="flex items-center gap-4 min-w-0">
-              <span
-                aria-hidden="true"
-                className="grid place-items-center rounded-full bg-brand-soft text-brand-text font-semibold select-none"
-                style={{ width: "64px", height: "64px", fontSize: "23px" }}
-              >
-                {initials}
-              </span>
+              {safeHttpUrl(c.photo_url) ? (
+                /* eslint-disable-next-line @next/next/no-img-element -- remote profile photo, unoptimized host */
+                <img
+                  alt=""
+                  className="talent-avatar"
+                  src={safeHttpUrl(c.photo_url) ?? undefined}
+                  width={72}
+                  height={72}
+                />
+              ) : (
+                <span
+                  aria-hidden="true"
+                  className="talent-avatar grid place-items-center bg-brand-soft text-brand-text font-semibold select-none"
+                  style={{ fontSize: "25px" }}
+                >
+                  {initials}
+                </span>
+              )}
               <div className="min-w-0">
                 <h1 className="text-[clamp(2rem,4.5vw,3.25rem)] font-semibold tracking-[-0.03em] leading-[1.06] text-ink">
                   {name}
@@ -670,6 +689,22 @@ export default async function TalentPage({
         <div className="max-w-[1160px] mx-auto px-6">
           <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start">
             <div className="min-w-0">
+              {summary ? (
+                <div className="talent-summary rise">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="meta-chip">AI summary</span>
+                    {bundle.profile?.updated_at ? (
+                      <span className="field-hint">
+                        Updated {String(bundle.profile.updated_at).slice(0, 10)}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="talent-summary-body">
+                    <Markdownish text={summary} />
+                  </div>
+                </div>
+              ) : null}
+
               <Section title="Profile facts">
                 <dl className="grid gap-x-10 lg:grid-cols-2 sq-facts">
                   {facts.map((f) => (
@@ -732,6 +767,20 @@ export default async function TalentPage({
                           title={p.title ?? "Project"}
                           meta={[p.role_in_project, p.project_type].filter(Boolean).join(" · ") || null}
                         />
+                        {p.id && bundle.depths?.[p.id] ? (
+                          <div className="flex flex-wrap gap-2 mt-2">
+                            {typeof bundle.depths![p.id]!.complexity_score === "number" ? (
+                              <span className="tag">
+                                Depth {bundle.depths![p.id]!.complexity_score}/10
+                              </span>
+                            ) : null}
+                            {typeof bundle.depths![p.id]!.evidence_quality === "string" ? (
+                              <span className="tag">
+                                Evidence: {bundle.depths![p.id]!.evidence_quality}
+                              </span>
+                            ) : null}
+                          </div>
+                        ) : null}
                         <Body label="Problem" value={p.problem_statement} />
                         <Body label="Description" value={p.description} />
                         <Body label="Impact" value={p.impact_summary} />
@@ -786,22 +835,32 @@ export default async function TalentPage({
                 </Section>
               ) : null}
 
-              {summary ? (
-                <Section title="Summary">
-                  <Markdownish text={summary} />
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <span className="meta-chip">AI-generated</span>
-                    {bundle.profile?.updated_at ? (
-                      <span className="field-hint">
-                        Updated {String(bundle.profile.updated_at).slice(0, 10)}
-                      </span>
-                    ) : null}
-                  </div>
-                </Section>
-              ) : null}
+
             </div>
 
             <aside className="grid gap-5 lg:sticky lg:top-24">
+              <div className="rounded-2xl bg-surface shadow-soft-md p-6">
+                <p className="text-[13px] font-mono uppercase tracking-[0.12em] text-muted">
+                  At a glance
+                </p>
+                <dl className="mt-3 grid gap-2.5">
+                  {[
+                    ["Role", (c.current_position ?? c.headline ?? "").trim() || null],
+                    ["Domain", c.domain ?? null],
+                    ["Experience", typeof c.total_experience_years === "number" ? `${c.total_experience_years} years` : null],
+                    ["Mode", mode],
+                    ["Availability", availability],
+                    ["Expected", salary],
+                  ]
+                    .filter(([, v]) => !!v)
+                    .map(([k, v]) => (
+                      <div key={k} className="flex items-baseline justify-between gap-3">
+                        <dt className="text-[13px] text-muted">{k}</dt>
+                        <dd className="text-[13.5px] font-medium text-ink text-right">{v}</dd>
+                      </div>
+                    ))}
+                </dl>
+              </div>
               <div className="rounded-2xl bg-surface shadow-soft-md p-6">
                 <p className="text-[14px] leading-[1.6] text-body">Hiring for something like this?</p>
                 <Link href="/hire/search" className="btn btn-primary btn-sm press mt-3.5">

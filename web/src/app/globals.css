@@ -2188,3 +2188,51 @@ details.judge[open] summary > svg:last-child { transform: rotate(180deg); }
   .btn-sm { min-height: 44px; }
   .nav-avatar { width: 44px; height: 44px; }
 }
+
+/* ---------------------------------------------------------------
+   Talent profile page
+   --------------------------------------------------------------- */
+.talent-avatar {
+  width: 72px;
+  height: 72px;
+  flex: none;
+  border-radius: 999px;
+  object-fit: cover;
+  border: 1px solid var(--line);
+}
+.talent-summary {
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+  padding: 22px 24px;
+  margin-bottom: 28px;
+}
+.talent-summary-body {
+  margin-top: 10px;
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--body);
+}
+.talent-summary-body p + p { margin-top: 10px; }
+
+/* ---------------------------------------------------------------
+   Search loading: progress track + completion-aware fill
+   --------------------------------------------------------------- */
+.search-progress {
+  position: relative;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--inset);
+  overflow: hidden;
+}
+.search-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--brand), var(--brand-strong));
+  transition: width 600ms var(--ease-out);
+}
+.search-progress .sq-bar-sweep {
+  position: absolute;
+  inset: 0;
+}

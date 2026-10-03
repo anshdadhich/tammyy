@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import { useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { DOMAINS, EMPLOYMENT_TYPES } from "@/lib/skills";
 import { jobSchema } from "@/lib/validators";
 import ResultsView from "./results-view";
@@ -93,6 +93,7 @@ export default function SearchClient({ session }: Props) {
   const [relocation, setRelocation] = useState(false);
 
   const searching = view === "searching";
+  const abortRef = useRef<AbortController | null>(null);
   const lastRun = runs[0];
   const expSummary = exp === "Any" ? "any experience" : exp.toLowerCase();
   const summary = `${seniority} · ${workMode} · ${expSummary} · ${skills.length} must-have${
@@ -128,6 +129,7 @@ export default function SearchClient({ session }: Props) {
     setView("searching");
     setStatus(`Searching for ${parsed.data.title}…`);
     const controller = new AbortController();
+    abortRef.current = controller;
     const timer = window.setTimeout(() => controller.abort(), 90_000);
     try {
       const json = (await postJson("/api/search", { job: parsed.data, deep }, { signal: controller.signal })) as {
@@ -160,6 +162,7 @@ export default function SearchClient({ session }: Props) {
       setView("compose");
     } finally {
       window.clearTimeout(timer);
+      if (abortRef.current === controller) abortRef.current = null;
       setStatus("");
     }
   }
@@ -202,7 +205,18 @@ export default function SearchClient({ session }: Props) {
   }
 
   if (view === "searching") {
-    return <SearchingPanel title={status.replace(/^Searching for /, "").replace(/…$/, "") || "your role"} />;
+    return (
+      <SearchingPanel
+        title={status.replace(/^Searching for /, "").replace(/…$/, "") || "your role"}
+        onCancel={() => {
+          abortRef.current?.abort();
+          abortRef.current = null;
+          setError("");
+          setStatus("");
+          setView("compose");
+        }}
+      />
+    );
   }
 
   if (view === "results" || view === "detail") {
