@@ -2,16 +2,30 @@ import { matchLevel, type SubScores } from "@/lib/scoring-live";
 
 export type MatchLevelValue = "strong" | "partial" | "weak";
 
+export type EvidencePoint = {
+  claim?: string;
+  evidence?: string;
+  confidence?: "high" | "medium" | "low" | string;
+};
+
+export type InterviewQuestionInfo = {
+  question?: string;
+  why_ask?: string;
+  follow_ups?: string[];
+};
+
 export type JudgeInfo = {
   overall_score?: number;
   match_level?: string;
   matched_requirements?: string[];
   missing_requirements?: string[];
   project_evidence?: string[];
-  strengths?: string[];
-  gaps?: string[];
-  risk_factors?: string[];
+  strengths?: (EvidencePoint | string)[];
+  gaps?: (EvidencePoint | string)[];
+  risk_factors?: (EvidencePoint | string)[];
   recommendation?: string;
+  verdict?: string;
+  interview_questions?: (InterviewQuestionInfo | string)[];
 };
 
 export type WorkExperienceRow = {

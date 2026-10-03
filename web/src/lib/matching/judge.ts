@@ -7,6 +7,20 @@ export interface JudgeInput {
   candidate_id: string;
 }
 
+/** A reasoned point: the claim, the evidence from the candidate's data, and
+ * how sure the judge is — not a bare label. */
+export interface EvidencePoint {
+  claim: string;
+  evidence: string;
+  confidence: "high" | "medium" | "low";
+}
+
+export interface InterviewQuestion {
+  question: string;
+  why_ask: string;
+  follow_ups: string[];
+}
+
 export interface JudgeResult {
   candidate_id: string;
   overall_score: number;
@@ -14,14 +28,16 @@ export interface JudgeResult {
   matched_requirements: string[];
   missing_requirements: string[];
   project_evidence: string[];
-  strengths: string[];
-  gaps: string[];
-  risk_factors: string[];
+  strengths: EvidencePoint[];
+  gaps: EvidencePoint[];
+  risk_factors: EvidencePoint[];
   salary_fit: "good" | "partial" | "poor" | "unknown";
   location_fit: "good" | "partial" | "poor" | "unknown";
   seniority_fit: "good" | "partial" | "poor" | "unknown";
   recommendation: string;
-  interview_questions: string[];
+  interview_questions: InterviewQuestion[];
+  /** 2-3 sentence verdict paragraph a recruiter can read without the JSON. */
+  verdict: string;
   raw?: unknown;
 }
 
@@ -38,15 +54,44 @@ export interface JudgeCallOpts {
 export const JUDGE_MAX_TOKENS = 1200;
 export const JUDGE_TIMEOUT_MS = 25000;
 
-export const JUDGE_SYSTEM_PROMPT = `You are an expert Technical Hiring Manager. Evaluate the candidate for the role. No keyword matching - look for evidence of capability and depth.
+export const JUDGE_SYSTEM_PROMPT = `You are an expert Technical Hiring Manager reviewing one candidate against one role for a recruiter who will skim your answer in under a minute and decide whether to interview.
+
 Score 4 dimensions (each 0-25):
 1. TECHNICAL DEPTH: CRUD vs hard problems (caching, concurrency, state, design)? Scale/hurdles overcome?
 2. RELEVANCE: does actual past work map to the job's actual problems?
 3. IMPACT/OWNERSHIP: owned vs assisted? Metrics or tutorial clone?
 4. RED FLAGS (inverted: 25 = clean, 0 = severe): bootcamp clone, buzzword list with no context, role-complexity mismatch.
-Rules: use ONLY provided info, mark gaps explicitly, be critical and objective, no vague praise.
+
+Anchors — match the candidate to one before scoring each dimension:
+- 21-25: quantified impact the candidate owned end-to-end, evidence in the data.
+- 14-20: did real work in this area but ownership or impact evidence is thin.
+- 7-13: listed the skill but projects show tutorial-level or assisted use.
+- 0-6: no evidence at all.
+
+EVERY point in strengths, gaps, and risk_factors must carry the specific evidence from the candidate's data that supports it (quote a project title, a number, a role line) and a confidence level. A point with no evidence must not appear. Interview questions must be specific to THIS candidate: each includes why it is worth asking (what gap or claim it probes) and 1-2 follow-ups that push for detail.
+
+Use ONLY the provided info. No vague praise, no invented facts, no restating the job description as a strength. Where the data is silent, say so in gaps rather than guessing.
+
 Output STRICT JSON only, exactly this shape:
-{"total_score":0,"technical_depth_score":0,"relevance_score":0,"impact_score":0,"red_flags_score":0,"best_project_match":"","why_they_are_a_good_fit":"","potential_interview_questions":["",""],"weaknesses_or_gaps":"","matched_requirements":[],"missing_requirements":[],"strengths":[],"risk_factors":[],"salary_fit":"good|partial|poor","location_fit":"good|partial|poor","seniority_fit":"good|partial|poor"}`;
+{
+  "total_score": 0,
+  "technical_depth_score": 0,
+  "relevance_score": 0,
+  "impact_score": 0,
+  "red_flags_score": 0,
+  "best_project_match": "",
+  "verdict": "2-3 sentence paragraph: the hiring call, the single strongest piece of evidence behind it, and the one thing that would change it",
+  "recommendation": "",
+  "matched_requirements": [],
+  "missing_requirements": [],
+  "strengths": [{"claim": "", "evidence": "", "confidence": "high|medium|low"}],
+  "gaps": [{"claim": "", "evidence": "", "confidence": "high|medium|low"}],
+  "risk_factors": [{"claim": "", "evidence": "", "confidence": "high|medium|low"}],
+  "interview_questions": [{"question": "", "why_ask": "", "follow_ups": [""]}],
+  "salary_fit": "good|partial|poor",
+  "location_fit": "good|partial|poor",
+  "seniority_fit": "good|partial|poor"
+}`;
 
 export function buildJudgeUserPrompt(job: JobReq, candidateJson: unknown): string {
   return `JOB:\n${JSON.stringify(
@@ -169,6 +214,59 @@ function strArr(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 }
 
+function toConfidence(v: unknown): EvidencePoint["confidence"] {
+  const s = String(v ?? "").trim().toLowerCase();
+  if (s === "high") return "high";
+  if (s === "low") return "low";
+  return "medium";
+}
+
+/** Accepts both the new {claim, evidence, confidence} shape and legacy plain
+ * strings, so a model that ignores the schema still parses. */
+function evidenceArr(v: unknown): EvidencePoint[] {
+  if (!Array.isArray(v)) return [];
+  const out: EvidencePoint[] = [];
+  for (const item of v) {
+    if (typeof item === "string" && item.trim()) {
+      out.push({ claim: item.trim(), evidence: "", confidence: "medium" });
+      continue;
+    }
+    if (item && typeof item === "object") {
+      const o = item as Record<string, unknown>;
+      const claim = typeof o.claim === "string" ? o.claim.trim() : "";
+      if (!claim) continue;
+      out.push({
+        claim,
+        evidence: typeof o.evidence === "string" ? o.evidence.trim() : "",
+        confidence: toConfidence(o.confidence),
+      });
+    }
+  }
+  return out;
+}
+
+function questionArr(v: unknown): InterviewQuestion[] {
+  if (!Array.isArray(v)) return [];
+  const out: InterviewQuestion[] = [];
+  for (const item of v) {
+    if (typeof item === "string" && item.trim()) {
+      out.push({ question: item.trim(), why_ask: "", follow_ups: [] });
+      continue;
+    }
+    if (item && typeof item === "object") {
+      const o = item as Record<string, unknown>;
+      const q = typeof o.question === "string" ? o.question.trim() : "";
+      if (!q) continue;
+      out.push({
+        question: q,
+        why_ask: typeof o.why_ask === "string" ? o.why_ask.trim() : "",
+        follow_ups: strArr(o.follow_ups).slice(0, 3),
+      });
+    }
+  }
+  return out.slice(0, 5);
+}
+
 export function parseJudgeOutput(
   candidate_id: string,
   rawText: string,
@@ -194,9 +292,9 @@ export function parseJudgeOutput(
             Number(raw.red_flags_score ?? 0),
         );
 
-  const gapsStr =
+  const legacyGaps =
     typeof raw.weaknesses_or_gaps === "string" && raw.weaknesses_or_gaps
-      ? [raw.weaknesses_or_gaps]
+      ? [{ claim: raw.weaknesses_or_gaps.trim(), evidence: "", confidence: "medium" as const }]
       : [];
 
   return {
@@ -208,9 +306,9 @@ export function parseJudgeOutput(
     project_evidence: typeof raw.best_project_match === "string" && raw.best_project_match
       ? [raw.best_project_match]
       : [],
-    strengths: strArr(raw.strengths),
-    gaps: gapsStr,
-    risk_factors: strArr(raw.risk_factors),
+    strengths: evidenceArr(raw.strengths),
+    gaps: [...evidenceArr(raw.gaps), ...legacyGaps],
+    risk_factors: evidenceArr(raw.risk_factors),
     salary_fit: toFit(raw.salary_fit),
     location_fit: toFit(raw.location_fit),
     seniority_fit: toFit(raw.seniority_fit),
@@ -218,7 +316,10 @@ export function parseJudgeOutput(
       typeof raw.why_they_are_a_good_fit === "string"
         ? raw.why_they_are_a_good_fit
         : "",
-    interview_questions: strArr(raw.potential_interview_questions).slice(0, 5),
+    interview_questions: questionArr(
+      raw.interview_questions ?? raw.potential_interview_questions,
+    ),
+    verdict: typeof raw.verdict === "string" ? raw.verdict.trim() : "",
     raw,
   };
 }

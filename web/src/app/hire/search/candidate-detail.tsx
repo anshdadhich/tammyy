@@ -176,6 +176,14 @@ export default function CandidateDetail({ row, onBack }: Props) {
     }
   };
 
+  type EvidencePointLike = { claim?: string; evidence?: string } | string;
+  const pointText = (p: EvidencePointLike): string => {
+    if (typeof p === "string") return p;
+    const claim = (p.claim ?? "").trim();
+    const evidence = (p.evidence ?? "").trim();
+    return evidence ? `${claim} — ${evidence}` : claim;
+  };
+
   const q1: string[] = [];
   if (subEntries.length) {
     q1.push(
@@ -189,7 +197,9 @@ export default function CandidateDetail({ row, onBack }: Props) {
   if (!q1.length && score != null) q1.push(`Overall match scores ${score}/100.`);
 
   const q2: string[] = [];
-  if (judge?.strengths?.length) q2.push(`Deep read strengths: ${listSentence(judge.strengths)}`);
+  if (judge?.strengths?.length) {
+    q2.push(`Deep read strengths: ${listSentence(judge.strengths.map(pointText))}`);
+  }
   if (judge?.project_evidence?.length) {
     q2.push(`Closest project evidence: ${listSentence(judge.project_evidence)}`);
   }
@@ -203,8 +213,8 @@ export default function CandidateDetail({ row, onBack }: Props) {
   if (judge?.missing_requirements?.length) {
     q3.push(`Missing requirements: ${listSentence(judge.missing_requirements)}`);
   }
-  if (judge?.gaps?.length) q3.push(`Deep read gaps: ${listSentence(judge.gaps)}`);
-  if (judge?.risk_factors?.length) q3.push(`Risk factors: ${listSentence(judge.risk_factors)}`);
+  if (judge?.gaps?.length) q3.push(`Deep read gaps: ${listSentence(judge.gaps.map(pointText))}`);
+  if (judge?.risk_factors?.length) q3.push(`Risk factors: ${listSentence(judge.risk_factors.map(pointText))}`);
   if (!q3.length && subEntries.length) {
     const weakest = [...subEntries].sort((a, b) => a[1] - b[1])[0];
     q3.push(`Weakest sub-score: ${SUB_LABELS[weakest[0]]} ${pct(weakest[1])}.`);
@@ -230,8 +240,12 @@ export default function CandidateDetail({ row, onBack }: Props) {
     if (top.length) line += `, led by ${top.join(" · ")}`;
     q4.push(`${line}.`);
   }
+  const verdictText = (judge?.verdict ?? "").trim();
+  if (verdictText) q4.push(/[.!?]$/.test(verdictText) ? verdictText : `${verdictText}.`);
   const recommendation = (judge?.recommendation ?? "").trim();
-  if (recommendation) q4.push(/[.!?]$/.test(recommendation) ? recommendation : `${recommendation}.`);
+  if (recommendation && recommendation !== verdictText) {
+    q4.push(/[.!?]$/.test(recommendation) ? recommendation : `${recommendation}.`);
+  }
 
   const qa = [
     { num: "01", q: Q1, a: q1.join(" ") },
@@ -239,6 +253,13 @@ export default function CandidateDetail({ row, onBack }: Props) {
     { num: "03", q: Q3, a: q3.join(" ") },
     { num: "04", q: Q4, a: q4.join(" ") },
   ].filter((item) => item.a.trim());
+
+  const questions =
+    judge?.interview_questions?.map((qq) =>
+      typeof qq === "string"
+        ? { question: qq, why_ask: "", follow_ups: [] as string[] }
+        : { question: qq.question ?? "", why_ask: qq.why_ask ?? "", follow_ups: qq.follow_ups ?? [] },
+    ).filter((qq) => qq.question.trim()) ?? [];
 
   const facts: Array<{ label: string; node: ReactNode }> = [];
   if (row.full_name) facts.push({ label: "Name", node: row.full_name });
@@ -493,6 +514,34 @@ export default function CandidateDetail({ row, onBack }: Props) {
               </div>
             ))}
           </div>
+
+          {questions.length ? (
+            <div className="mt-5">
+              <p className="sq-overline">Interview questions</p>
+              <div className="grid gap-2.5 mt-3">
+                {questions.map((qq, i) => (
+                  <div className="sq-qa" key={`qq-${i}`}>
+                    <div className="sq-qa-head">
+                      <span className="sq-qa-num" aria-hidden="true">
+                        {String(i + 1).padStart(2, "0")}
+                      </span>
+                      <p className="sq-qa-q">{qq.question}</p>
+                    </div>
+                    <div className="sq-qa-a">
+                      {qq.why_ask ? <p>{qq.why_ask}</p> : null}
+                      {qq.follow_ups.length ? (
+                        <ul className="mt-1 pl-4 list-disc text-[13px] text-muted">
+                          {qq.follow_ups.map((f, j) => (
+                            <li key={j}>{f}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </section>
       ) : null}
 

@@ -21,11 +21,30 @@ export async function generateCandidateSummary(input: {
   role: string; exp: string; domain: string; skills: string[];
   headline: string; projects: { title: string; description: string; tech: string; impact: string }[];
 }): Promise<{ markdown: string; json: Record<string, unknown> } | null> {
-  const system = `You are a factual talent analyst. Use ONLY provided data. No buzzwords, no exaggeration. Missing="Not specified." Output Markdown summary with: identity, core skills, evidence/project depth, outcomes, education, constraints, availability, gaps.`;
+  const system = `You are a factual talent analyst writing for recruiters who scan profiles in under a minute. Use ONLY the provided data — never invent facts.
+
+Write 4-6 short paragraphs (prose, not bullet fragments): identity and current focus; core skills with a concrete artifact behind each notable claim (a project, a number, a role line); strongest evidence of depth (the one project worth reading first, and why); outcomes and impact; constraints (availability, location, salary); and gaps where the data is genuinely silent.
+
+Rules:
+- Every strength or impact claim cites something from the data — "shipped X" is weak, "shipped X (200 paying users, per project impact)" is a claim with evidence.
+- Omit sections the data cannot support. Never write "Not specified." or pad with filler.
+- Plain, direct sentences. No buzzwords, no restating the job.
+
+Then add one line: "Weakest evidence:" and name the single thinnest area, so reviewers know where to probe.`;
   const user = JSON.stringify(input).slice(0, 8000);
-  const text = await chat(system, user, { maxTokens: 1500 });
-  if (!text) return null;
-  return { markdown: text.slice(0, 8000), json: { generated: true, at: new Date().toISOString() } };
+  const draft = await chat(system, user, { maxTokens: 1500 });
+  if (!draft) return null;
+  const critiqued = await chat(
+    `You are a strict reviewer of hiring-profile summaries. Given a draft summary and the source data, list every claim that is vague, uncited, or padded — and rewrite the summary fixing exactly those, in the same format. If the draft is already evidence-backed throughout, return it unchanged.`,
+    `SOURCE DATA:
+${user}
+
+DRAFT:
+${draft}`,
+    { maxTokens: 1500 },
+  );
+  const markdown = (critiqued ?? draft).slice(0, 8000);
+  return { markdown, json: { generated: true, critiqued: !!critiqued, at: new Date().toISOString() } };
 }
 
 export async function analyzeProjectDepth(p: {
