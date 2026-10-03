@@ -80,8 +80,9 @@ export function depthScore(ctx: ScoreContext): number {
 export function constraintsScore(job: JobReq, ctx: ScoreContext): number {
   let salary = 0.5;
   const want = ctx.minSalary != null ? annualize(ctx.minSalary, ctx.salaryFreq) : null;
-  if (job.salary_max != null && want != null) {
-    salary = want <= job.salary_max ? 1 : want <= job.salary_max * 1.2 ? 0.4 : 0;
+  const cap = job.salary_max != null ? annualize(job.salary_max, job.salary_frequency) : null;
+  if (cap != null && want != null) {
+    salary = want <= cap ? 1 : want <= cap * 1.2 ? 0.4 : 0;
   } else if (want != null) salary = 0.7;
   let location = 0.5;
   const remoteOk = job.remote_allowed || ctx.remotePref === "remote_only" || ctx.remotePref === "flexible";

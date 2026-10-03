@@ -24,11 +24,11 @@ auth/security, frontend/UI, and Cloudflare runtime, plus the FTS ranking item.
 4. **[bug][FIXED]** Vectorize returns `score`, not `distance` — every chunk was
    scored at distance=1 (this was the search/ranking auditor's #1 too).
    Now converts `distance = 1 - score` (cosine metric).
-5. **[bug][TODO]** Recall cap: Vectorize has no pagination, so retrieval can
+5. **[bug][TODO-DECISION]** Recall cap: Vectorize has no pagination, so retrieval can
    only see the top-50 chunks. Widen by fetching ids from Vectorize (no
    metadata) then joining chunk text from D1 (`profile_chunks.content_text`),
    or push filters into Vectorize metadata filtering.
-6. **[bug][TODO]** D1 bound-parameter cap (100/query): the visibility query is
+6. **[bug][FIXED]** D1 bound-parameter cap (100/query): the visibility query is
    batched (90-id batches), but `inArray(..., p_candidate_ids)`
    (`retrieval.ts:180`) is caller-controlled and unbatched — chunk it and
    filter in JS instead.
@@ -52,30 +52,30 @@ auth/security, frontend/UI, and Cloudflare runtime, plus the FTS ranking item.
 11. **[bug][FIXED]** `embedTexts` dropped blank strings, breaking index
     alignment for callers that zip vectors back to inputs. Now throws on
     blank input and returns one vector per input.
-12. **[bug][TODO]** Workflow instance ids inconsistent: routes use
+12. **[bug][FIXED]** Workflow instance ids inconsistent: routes use
     `candidateId-${Date.now()}` (`candidates/route.ts:543`,
     `candidates/summary/route.ts:38`) so reruns pile up; `enqueueProfilePipeline`
     (`profile-pipeline.ts:286`) uses `id: candidateId` and is dead code. Pick
     one scheme, dedupe, wire up or delete the helper.
-13. **[inconsistency][TODO]** `StorageNotConfiguredError` is thrown but
+13. **[inconsistency][FIXED]** `StorageNotConfiguredError` is thrown but
     `isStorageNotConfigured` is never used, so uploads report a generic 500
     instead of "storage not configured" (`storage.ts:31-44`,
     `uploads/route.ts:352`). Map it to 503 with a clear message.
-14. **[inconsistency][TODO]** `.gitignore:34` (`.env*`) also ignores
+14. **[inconsistency][FIXED]** `.gitignore:34` (`.env*`) also ignores
     `.env.example`, so the sample env file can't be shared. Add
     `!.env.example`.
-15. **[inconsistency][TODO]** `.env.example` documents the old stack
+15. **[inconsistency][FIXED]** `.env.example` documents the old stack
     (MongoDB/Inngest/Voyage) and `mongodb@^7.7.0` is an unused dependency
     (`package.json`). Rewrite for the actual bindings (SESSION_SECRET,
     RESEND_*, OPENROUTER_*, BOOTSTRAP_*) and drop `mongodb`.
-16. **[inconsistency][TODO]** `EMBEDDING_TIMEOUT_MS` is declared but never
+16. **[inconsistency][FIXED]** `EMBEDDING_TIMEOUT_MS` is declared but never
     applied to `env.AI.run` (`embeddings.ts:9, 36`). Race the call against it.
 17. **[improvement][TODO]** `incrementalCache: "dummy"` (`open-next.config.ts`)
     makes any future `revalidate`/ISR a silent no-op. Switch to the R2
     incremental cache + `NEXT_INC_CACHE_R2_BUCKET` when R2 lands.
-18. **[improvement][TODO]** RateLimiter DO prune trigger
-    (`buckets.size % PRUNE_EVERY === 0`) almost never fires; prune on a fetch
-    counter instead (prune-on-load is already added).
+18. **[improvement][FIXED]** RateLimiter DO prune trigger switched from the
+    near-dead modulo-of-size check to an absolute fetch counter (prune-on-load
+    was already added).
 19. **[improvement][TODO]** Vectorize metadata near the 10KiB/vector cap:
     slice `project_title` and cap serialized metadata size before upsert
     (`retrieval.ts:215`), keeping `content_text`/`candidate_id` intact.
@@ -99,7 +99,7 @@ auth/security, frontend/UI, and Cloudflare runtime, plus the FTS ranking item.
 24. **[bug][FIXED]** Vectorize `score` vs `distance` — see A4.
 25. **[bug][FIXED]** Freshness subscore was dead: the scoring select never
     fetched `updated_at`. Now included (`search/route.ts` scoring select).
-26. **[bug][FIXED-CONTAINED]** Salary unit mismatch: retrieval and scoring now
+26. **[bug][FIXED]** Salary unit mismatch: retrieval and scoring now
     annualize by frequency (incl. `weekly`), and the validator enum accepts
     `weekly`. **[TODO remainder]** The job side has no frequency at all — a
     monthly-entered cap still silently excludes everyone. Either annualize
@@ -124,7 +124,7 @@ auth/security, frontend/UI, and Cloudflare runtime, plus the FTS ranking item.
     `locationCity` (`scoring-live.ts`).
 33. **[inconsistency][FIXED]** "inactive" availability now scores 0.15 instead
     of the unknown-value 0.4.
-34. **[inconsistency][TODO]** Seniority-band fill is unreachable for API
+34. **[inconsistency][FIXED]** Seniority-band fill is unreachable for API
     clients: `jobSchema` defaults `max_exp` to 5 but `rangeUnconstrained`
     requires ≥50 (`search/route.ts:129`, `validators.ts:190`). Default
     `max_exp` to 50 or treat schema defaults as unconstrained. (An attempted
@@ -134,7 +134,7 @@ auth/security, frontend/UI, and Cloudflare runtime, plus the FTS ranking item.
 36. **[improvement][FIXED]** Judge depth fetch scanned the entire
     `projectDepthAnalysis` table. Now filtered to the top candidates' project
     ids.
-37. **[improvement][TODO]** Judge input is incomplete both ways: the job
+37. **[improvement][FIXED]** Judge input is incomplete both ways: the job
     payload omits salary/location/remote/exp_max (`judge.ts:52-66`) and the
     candidate payload omits skills, education, OSS, `salary_frequency`
     (`search/route.ts` judge inputs) — so `salary_fit/location_fit/seniority_fit`
@@ -192,14 +192,13 @@ auth/security, frontend/UI, and Cloudflare runtime, plus the FTS ranking item.
     hash could burn unbounded DO CPU). Now caps `n ≤ 2^15`, `r ≤ 16`, `p ≤ 8`.
 52. **[improvement][FIXED]** RateLimiter DO cold-loaded every key ever written;
     expired keys are now pruned on load.
-53. **[improvement][FIXED]** Password-set paths now revoke existing sessions
-    (claim path). **[TODO remainder]** `auth/signup/route.ts:109` password-set
-    on a passwordless row should do the same.
+53. **[improvement][FIXED]** Password-set paths revoke existing sessions
+    (both claim and signup paths).
 54. **[improvement][TODO]** Password policy is minimal (≥8 chars only) and
     registration/password state is probeable (distinct 409 "exists" and
     "Incorrect password" responses). Consider a breach-list check and
     response consolidation where UX allows.
-55. **[improvement][TODO]** CSRF is SameSite=Lax + JSON content-type only.
+55. **[improvement][FIXED]** CSRF: same-origin Origin/Referer check added to readJsonBody as defense-in-depth.
     Holds for the current POST/DELETE-only mutation surface; add per-session
     CSRF tokens for defense-in-depth or document the invariant.
 
@@ -232,7 +231,7 @@ auth/security, frontend/UI, and Cloudflare runtime, plus the FTS ranking item.
     "/ month".
 64. **[inconsistency][FIXED]** Dev-only "Autofill test data" button is now
     gated behind `NODE_ENV !== "production"`.
-65. **[inconsistency][TODO]** Per-field password toggles: `showConfirm` state
+65. **[inconsistency][FIXED]** Per-field password toggles: `showConfirm` state
     exists but the confirm field may still lack its own show/hide button —
     finish the split (`login-form.tsx`).
 66. **[a11y][FIXED]** Skip link now moves focus (`<main tabIndex={-1}>`).
@@ -240,33 +239,33 @@ auth/security, frontend/UI, and Cloudflare runtime, plus the FTS ranking item.
     every 450ms; single "Step n of N" status line (`searching-panel.tsx`).
 68. **[a11y][FIXED]** Password show/hide buttons keyboard-reachable
     (`tabIndex={-1}` removed).
-69. **[a11y][TODO]** Fake `role="combobox"` on the native datalist input
+69. **[a11y][FIXED]** Fake `role="combobox"` on the native datalist input
     misinforms screen readers (`join-wizard.tsx:929-944`). Drop the attrs.
-70. **[a11y][TODO]** Admin tablist has no tabpanel/`aria-controls`/roving
+70. **[a11y][FIXED]** Admin tablist — now aria-pressed toggle buttons/`aria-controls`/roving
     tabindex (`admin-employers.tsx:103-111`). Use `aria-pressed` toggles or
     real tab semantics.
 71. **[a11y][TODO]** Admin domain-match verdict exists only in a hover `title`
     (`admin-employers.tsx:150`) — invisible to touch/AT.
 72. **[forms][FIXED]** Logout has pending handling and won't double-fire.
-73. **[forms][TODO]** Admin `busy` guard reads stale state (two rapid clicks on
+73. **[forms][FIXED]** Admin `busy` guard is ref-based now (two rapid clicks on
     different rows both submit) — use a ref-based guard
     (`admin-employers.tsx:72-74`).
-74. **[forms][TODO]** Admin shows stale rows with no loading indicator during
+74. **[forms][FIXED]** Admin clears rows while loading with no loading indicator during
     tab switches — add a skeleton/clear.
-75. **[forms][TODO]** `runSearch` has no abort/timeout; a hung request parks
+75. **[forms][FIXED]** `runSearch` has AbortController + 90s timeout; a hung request parks
     the searching panel forever. AbortController + cancel button
     (`search-client.tsx:113-166`).
-76. **[forms][TODO]** Wizard draft restore flashes the empty form
+76. **[forms][FIXED]** Wizard renders gated on `hydrated` the empty form
     (`setTimeout(0)` restore) — gate render on `hydrated`
     (`join-wizard.tsx:231-238`).
 77. **[mobile][FIXED]** Coarse-pointer 44px tap targets for `.chip-x`,
     `.btn-sm`, `.nav-avatar`.
 78. **[reduced-motion][FIXED]** Checklist replay and the searching-panel stage
     clock now snap to the end state under `prefers-reduced-motion`.
-79. **[inconsistency][TODO]** Dead reduced-motion overrides
+79. **[inconsistency][FIXED]** Dead reduced-motion overrides cleaned; `.spin` exempted
     (`globals.css:2179-2184`) are overridden by the blanket `*` rule — delete
     them or exempt `.spin`.
-80. **[inconsistency][TODO]** Nav styles declared twice (`.site-brand`,
+80. **[inconsistency][FIXED]** Duplicated nav rules consolidated (`.site-brand`,
     `.site-nav-actions`, `.site-nav-link`, `.site-navbar-wrap`,
     `.match-mode-switcher`) with later blocks overriding earlier — fold the
     "Sliding nav pill" section back into the originals (`globals.css`).
@@ -280,13 +279,13 @@ auth/security, frontend/UI, and Cloudflare runtime, plus the FTS ranking item.
 
 ## E. API routes & data layer (Task 2 — preserved from the stalled agent's final thoughts)
 
-82. **[bug][TODO]** Shortlists upsert relies on a unique constraint that does
+82. **[bug][FIXED]** Shortlists upsert now backed by `shortlists_unique` (job_id '' sentinel, migration 0001 applied) that does
     not exist — only PK on `id`, so `onConflictDoNothing()`
     (`shortlists/route.ts:278`) never conflicts and duplicates accumulate
     (the fallback select at `:281` is dead). Fix needs care: SQLite treats
     NULLs as distinct in unique indexes, so use a partial unique index or a
     normalized `job_id` sentinel.
-83. **[bug][TODO]** Search cached path leaks `user_id` and `consent_status`
+83. **[bug][FIXED]** Search cached path projection aligned with fresh path (no user_id/consent_status) and `consent_status`
     (`search/route.ts:366` spreads the full candidate row) while the fresh
     path selects explicit columns and excludes them. Cached results expose
     them to HR viewers — align the projections.
@@ -294,7 +293,7 @@ auth/security, frontend/UI, and Cloudflare runtime, plus the FTS ranking item.
     updated before `candidates.contact_email` (`candidates/route.ts:1188-1202`
     then later) — a failure between them leaves identity mismatch. Wrap in
     `db.transaction`/`batch`.
-85. **[bug][TODO]** PUT skills replace wipes pipeline-sourced skill links: the
+85. **[bug][FIXED]** PUT skills replace preserves non-self-reported links: the
     block deletes all `candidate_skills` rows and re-inserts only
     `canon`/`self_reported` names (`candidates/route.ts:~1390-1440`), and the
     restore path also uses `source: "self_reported"`. Preserve non-self-reported
@@ -314,7 +313,7 @@ auth/security, frontend/UI, and Cloudflare runtime, plus the FTS ranking item.
 89. **[inconsistency][TODO]** Cached non-deep results omit `match_level` and
     `top_skills` (fresh path includes them) — UI degrades silently
     (`search/route.ts:366` flatten vs `:657-659`).
-90. **[inconsistency][TODO]** `corpusUnchanged` only checks the `candidates`
+90. **[inconsistency][TODO-DECISION]** `corpusUnchanged` only checks the `candidates`
     table; pipeline-completed chunks (`profile_chunks` written later) don't
     bump `candidates.updated_at`, so a cached search can ignore an enriched
     profile for up to an hour. Bump `updated_at` (or a dedicated version) when
@@ -334,7 +333,7 @@ auth/security, frontend/UI, and Cloudflare runtime, plus the FTS ranking item.
 95. **[improvement][TODO]** `setEmployerPlan` doesn't reset `cycle_started_at`
     and the column is vestigial (counting uses month-start directly). Either
     use it or drop it (`quotas.ts`).
-96. **[improvement][TODO]** `verifyCaptchaHook` only checks token presence
+96. **[improvement][FIXED]** `verifyCaptchaHook` verifies with Turnstile when CAPTCHA_REQUIRED=1
     (≥8 chars), it never verifies with the provider (`candidates/route.ts`).
     Wire real Turnstile verification when `CAPTCHA_REQUIRED=1`.
 97. **[improvement][TODO]** Candidate existence oracle: POST returns 409 with

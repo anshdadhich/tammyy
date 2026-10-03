@@ -9,6 +9,7 @@ import {
   getObjectRange,
   isDuplicateObject,
   isObjectPath,
+  isStorageNotConfigured,
   objectHead,
   presignDownload,
   presignUpload,
@@ -347,6 +348,7 @@ async function handleProxyUpload(request: Request): Promise<Response> {
   try {
     await putObject(bucket, path, bytes);
   } catch (e) {
+    if (isStorageNotConfigured(e)) return err("file storage is not configured yet", 503);
     if (isDuplicateObject(e)) return err("upload failed", 409);
     console.error("[uploads] storage upload failed", redactPii(bucket));
     return err("upload failed", 500);
@@ -390,9 +392,25 @@ async function handleDirectPut(
 
   const body = request.body;
   if (!body) return err("empty upload body");
+  // Hard cap regardless of content-length: chunked bodies carry none, and
+  // an unbounded stream would blow the CPU/memory budget outright.
+  let cap = 0;
+  const limited = body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, ctl) {
+        cap += chunk.byteLength;
+        if (cap > MAX_BYTES) {
+          ctl.error(new Error("file too large"));
+          return;
+        }
+        ctl.enqueue(chunk);
+      },
+    }),
+  );
   try {
-    await putObject(bucketRaw, pathRaw, body);
+    await putObject(bucketRaw, pathRaw, limited);
   } catch (e) {
+    if (isStorageNotConfigured(e)) return err("file storage is not configured yet", 503);
     if (isDuplicateObject(e)) return err("upload failed", 409);
     console.error("[uploads] direct put failed", redactPii(bucketRaw));
     return err("upload failed", 500);

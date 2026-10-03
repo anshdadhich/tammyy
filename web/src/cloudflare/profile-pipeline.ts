@@ -1,7 +1,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { eq, inArray } from "drizzle-orm";
 import { getDb, schema } from "@/db/client";
-import { setRuntimeEnv } from "@/lib/cf";
+import { setRuntimeEnv, cfEnv } from "@/lib/cf";
 import { generateCandidateSummary, analyzeProjectDepth } from "@/lib/ai";
 import { embedTexts } from "@/lib/embeddings";
 import { upsertChunkVector } from "@/lib/matching/retrieval";
@@ -23,6 +23,11 @@ type ProjectRow = typeof schema.projects.$inferSelect;
 type ExperienceRow = typeof schema.workExperiences.$inferSelect;
 
 const EMAIL_TIMEOUT_MS = 10_000;
+
+async function sha256Hex(input: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 export function buildChunks(input: {
   headline: string;
@@ -46,7 +51,7 @@ export function buildChunks(input: {
 
   const base = [
     {
-      id: `summary-${crypto.randomUUID()}`,
+      id: "summary",
       chunk_type: "summary",
       content_text: summaryText,
       metadata_json: {
@@ -258,24 +263,39 @@ export class ProfilePipelineWorkflow extends WorkflowEntrypoint<Env, Params> {
         })
         .from(schema.profileChunks)
         .where(eq(schema.profileChunks.candidate_id, candidateId));
-      const oldById = new Map(existing.map((r) => [r.content_text, r.id]));
 
       await db
         .delete(schema.profileChunks)
         .where(eq(schema.profileChunks.candidate_id, candidateId));
 
+      const newIds = new Set<string>();
       for (let i = 0; i < chunks.length; i++) {
         const c = chunks[i];
-        const id = oldById.get(c.content_text) ?? crypto.randomUUID();
-        await db.insert(schema.profileChunks).values({
-          id,
-          candidate_id: candidateId,
-          chunk_type: c.chunk_type,
-          content_text: c.content_text,
-          content_hash: crypto.randomUUID(),
-          metadata_json: c.metadata_json,
-          embedding_dim: vectors[i].length,
-        });
+        // Deterministic id + content hash: identical content re-embeds to the
+        // same id, so re-runs are idempotent and stale vectors are detectable.
+        const contentHash = await sha256Hex(`${candidateId}:${c.chunk_type}:${c.content_text}`);
+        const id = `${c.chunk_type}-${contentHash.slice(0, 24)}`;
+        newIds.add(id);
+        await db
+          .insert(schema.profileChunks)
+          .values({
+            id,
+            candidate_id: candidateId,
+            chunk_type: c.chunk_type,
+            content_text: c.content_text,
+            content_hash: contentHash,
+            metadata_json: c.metadata_json,
+            embedding_dim: vectors[i].length,
+          })
+          .onConflictDoUpdate({
+            target: schema.profileChunks.id,
+            set: {
+              content_text: c.content_text,
+              content_hash: contentHash,
+              metadata_json: c.metadata_json,
+              embedding_dim: vectors[i].length,
+            },
+          });
         await upsertChunkVector({
           id,
           candidate_id: candidateId,
@@ -284,6 +304,18 @@ export class ProfilePipelineWorkflow extends WorkflowEntrypoint<Env, Params> {
           metadata_json: c.metadata_json,
           embedding: vectors[i],
         });
+      }
+      // Delete vectors whose chunks no longer exist (text changed or removed)
+      // — they would otherwise keep serving stale content.
+      const staleIds = existing.map((r) => r.id).filter((rid) => !newIds.has(rid));
+      if (staleIds.length) {
+        try {
+          const env = await cfEnv();
+          await env.VECTORS.deleteByIds(staleIds);
+        } catch (e) {
+          console.error("[pipeline] stale vector cleanup failed", e instanceof Error ? e.message : e);
+        }
+        await db.delete(schema.profileChunks).where(inArray(schema.profileChunks.id, staleIds));
       }
       return { count: chunks.length };
     });
@@ -310,9 +342,3 @@ export class ProfilePipelineWorkflow extends WorkflowEntrypoint<Env, Params> {
   }
 }
 
-export async function enqueueProfilePipeline(env: Env, candidateId: string): Promise<void> {
-  await env.PROFILE_PIPELINE.create({
-    id: candidateId,
-    params: { candidateId } satisfies Params,
-  });
-}

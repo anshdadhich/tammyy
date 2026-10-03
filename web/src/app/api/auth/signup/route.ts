@@ -112,6 +112,7 @@ export async function POST(request: Request): Promise<Response> {
         .update(schema.users)
         .set({ password_hash })
         .where(eq(schema.users.id, raw.id));
+      await db.delete(schema.sessions).where(eq(schema.sessions.user_id, raw.id));
     } catch (e) {
       console.error("[auth/signup] password set failed", e instanceof Error ? e.message : e);
       return Response.json({ error: "Could not create the account. Try again." }, { status: 503 });

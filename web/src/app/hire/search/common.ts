@@ -117,15 +117,21 @@ export function apiError(json: unknown): string {
   return "Something went wrong";
 }
 
-export async function postJson(url: string, body: Record<string, unknown>): Promise<unknown> {
+export async function postJson(
+  url: string,
+  body: Record<string, unknown>,
+  init?: { signal?: AbortSignal },
+): Promise<unknown> {
   let res: Response;
   try {
     res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      signal: init?.signal,
     });
-  } catch {
+  } catch (e) {
+    if (e instanceof Error && e.name === "AbortError") throw new Error("Search timed out. Try again.");
     throw new Error("Network error");
   }
   const json: unknown = await res.json().catch(() => ({}));

@@ -226,6 +226,7 @@ export default function JoinWizard() {
       setHydrated(true);
     }, 0);
     return () => clearTimeout(timer);
+    setHydrated(true);
   }, []);
 
   useEffect(() => {
@@ -586,6 +587,10 @@ export default function JoinWizard() {
     [nextFrom, pending, publish, published, step],
   );
 
+  if (!hydrated) {
+    return <div className="rounded-2xl bg-surface p-5 shadow-soft-md sm:p-8" aria-busy="true" />;
+  }
+
   if (published) {
     return (
       <div
@@ -929,9 +934,6 @@ export default function JoinWizard() {
                     id="j-loc"
                     className="input"
                     style={{ paddingRight: "38px" }}
-                    role="combobox"
-                    aria-expanded="false"
-                    aria-controls="join-locations"
                     aria-autocomplete="list"
                     list="join-locations"
                     placeholder="Bengaluru"

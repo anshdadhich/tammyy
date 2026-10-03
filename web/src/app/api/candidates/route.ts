@@ -3,6 +3,7 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, schema, type Db } from "@/db/client";
 import { cfEnv } from "@/lib/cf";
+import { enqueueProfilePipeline } from "@/lib/pipeline";
 import { candidateSchema, normalizeEmail } from "@/lib/validators";
 import { revealedCandidateIds, lockContacts } from "@/lib/contact-prefs";
 import { normalizeSkills } from "@/lib/skills";
@@ -70,13 +71,28 @@ function prefsDegraded(c: Record<string, unknown>): boolean {
   return SHOW_FLAGS.some((f) => !(f in c));
 }
 
-function verifyCaptchaHook(raw: unknown): boolean {
-  if (process.env.CAPTCHA_REQUIRED === "1" || process.env.TURNSTILE_REQUIRED === "1") {
-    const r = (raw ?? {}) as Record<string, unknown>;
-    const token = r.captchaToken ?? r.turnstileToken ?? r["cf-turnstile-response"];
-    if (typeof token !== "string" || token.trim().length < 8) return false;
+const TURNSTILE_VERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
+
+async function verifyCaptchaHook(raw: unknown, request: Request): Promise<boolean> {
+  if (process.env.CAPTCHA_REQUIRED !== "1" && process.env.TURNSTILE_REQUIRED !== "1") {
+    return true;
   }
-  return true;
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const token = r.captchaToken ?? r.turnstileToken ?? r["cf-turnstile-response"];
+  if (typeof token !== "string" || token.trim().length < 8) return false;
+  const secret = process.env.TURNSTILE_SECRET_KEY;
+  if (!secret) return false;
+  try {
+    const body = new FormData();
+    body.set("secret", secret);
+    body.set("response", token);
+    body.set("remoteip", request.headers.get("cf-connecting-ip") ?? "");
+    const res = await fetch(TURNSTILE_VERIFY_URL, { method: "POST", body });
+    const json = (await res.json()) as { success?: boolean };
+    return json.success === true;
+  } catch {
+    return false;
+  }
 }
 
 function honeypotTripped(raw: unknown): boolean {
@@ -539,10 +555,7 @@ async function skillIdMap(
 async function enqueuePipeline(candidateId: string): Promise<void> {
   try {
     const env = await cfEnv();
-    await env.PROFILE_PIPELINE.create({
-      id: `${candidateId}-${Date.now()}`,
-      params: { candidateId },
-    });
+    await enqueueProfilePipeline(env, candidateId);
   } catch (e) {
     console.error("[candidates] pipeline enqueue failed", redactPii((e as Error)?.message ?? String(e)).slice(0, 200));
   }
@@ -557,7 +570,7 @@ export async function POST(request: Request) {
   if (honeypotTripped(rawBody)) {
     return Response.json({ error: "submission rejected" }, { status: 400 });
   }
-  if (!verifyCaptchaHook(rawBody)) {
+  if (!(await verifyCaptchaHook(rawBody, request))) {
     return Response.json({ error: "verification required" }, { status: 403 });
   }
   const session = await getSessionUser();
@@ -1389,35 +1402,59 @@ export async function PUT(request: Request) {
   if (present.has("skills")) {
     try {
       const { canon, byName, ok: skillsOk } = await skillIdMap(db, c.skills ?? []);
-      const nextNames = [...canon.map((s) => s.toLowerCase())].sort();
-      let haveNames: string[] | null = null;
+      let haveSelf: string[] | null = null;
       try {
+        // Only self-reported links are the owner's to replace; links the
+        // pipeline derived (source != "self_reported") must survive a save.
         const haveLinks = await db
-          .select({ skill_id: schema.candidateSkills.skill_id })
+          .select({
+            skill_id: schema.candidateSkills.skill_id,
+            source: schema.candidateSkills.source,
+          })
           .from(schema.candidateSkills)
           .where(eq(schema.candidateSkills.candidate_id, id));
-        const skillIds = [...new Set(haveLinks.map((r) => r.skill_id))].filter(Boolean);
+        const selfIds = haveLinks
+          .filter((l) => (l.source ?? "self_reported") === "self_reported")
+          .map((l) => l.skill_id);
+        const skillIds = [...new Set(selfIds)].filter(Boolean);
         const skillDocs = skillIds.length
           ? await db
               .select({ name: schema.skills.name })
               .from(schema.skills)
               .where(inArray(schema.skills.id, skillIds))
           : [];
-        haveNames = skillDocs.map((s) => s.name.toLowerCase()).filter(Boolean).sort();
+        haveSelf = skillDocs.map((s) => s.name.toLowerCase()).filter(Boolean).sort();
       } catch {
-        haveNames = null;
+        haveSelf = null;
       }
-      if (!skillsOk || haveNames === null) {
+      if (!skillsOk || haveSelf === null) {
         console.error("[candidates] skills read failed — skipping rewrite to protect existing links");
         putWarnings.push("skills: could not save (code SKL_SAVE)");
       } else {
+        const nextNames = [...canon.map((s) => s.toLowerCase())].sort();
         const links = canon.flatMap((name) => {
           const sid = byName.get(name.toLowerCase());
           return sid ? [{ candidate_id: id, skill_id: sid, source: "self_reported" }] : [];
         });
-        if (!(links.length > 0 && JSON.stringify(nextNames) === JSON.stringify(haveNames))) {
+        if (JSON.stringify(nextNames) !== JSON.stringify(haveSelf)) {
           materialChanged = true;
-          await db.delete(schema.candidateSkills).where(eq(schema.candidateSkills.candidate_id, id));
+          const selfRows = await db
+            .select({ skill_id: schema.candidateSkills.skill_id, source: schema.candidateSkills.source })
+            .from(schema.candidateSkills)
+            .where(eq(schema.candidateSkills.candidate_id, id));
+          const staleIds = selfRows
+            .filter((r) => (r.source ?? "self_reported") === "self_reported")
+            .map((r) => r.skill_id);
+          if (staleIds.length) {
+            await db
+              .delete(schema.candidateSkills)
+              .where(
+                and(
+                  eq(schema.candidateSkills.candidate_id, id),
+                  inArray(schema.candidateSkills.skill_id, staleIds),
+                ),
+              );
+          }
           if ((c.skills ?? []).length > 0) {
             if (links.length) {
               try {
@@ -1425,16 +1462,6 @@ export async function PUT(request: Request) {
               } catch (e) {
                 console.error("[candidates] skills replace failed", redactPii((e as Error).message));
                 putWarnings.push("skills: could not save (code SKL_SAVE)");
-                const prevLinks = haveNames.flatMap((name) => {
-                  const sid = byName.get(name);
-                  return sid ? [{ candidate_id: id, skill_id: sid, source: "self_reported" }] : [];
-                });
-                if (prevLinks.length) {
-                  try {
-                    await db.insert(schema.candidateSkills).values(prevLinks).onConflictDoNothing();
-                  } catch {
-                  }
-                }
               }
             } else {
               putWarnings.push("skills: some skill names were skipped");

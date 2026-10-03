@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, schema } from "@/db/client";
 import { cfEnv } from "@/lib/cf";
+import { enqueueProfilePipeline } from "@/lib/pipeline";
 import { guardOwnerAuth } from "@/lib/api-auth";
 import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { readJsonBody } from "@/lib/http";
@@ -35,10 +36,7 @@ export async function POST(request: Request) {
   if (!existing) return Response.json({ error: "candidate not found" }, { status: 404 });
   try {
     const env = await cfEnv();
-    await env.PROFILE_PIPELINE.create({
-      id: `${parsed.data.id}-${Date.now()}`,
-      params: { candidateId: parsed.data.id },
-    });
+    await enqueueProfilePipeline(env, parsed.data.id);
   } catch {
     return Response.json({ error: "Could not start regeneration. Try again." }, { status: 502 });
   }

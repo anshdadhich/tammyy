@@ -287,17 +287,27 @@ export default function LoginForm({ initialStage = "signin" }: { initialStage?: 
             <label className="field-label" htmlFor="hr-confirm-password">
               Confirm password <span className="req" aria-hidden="true">*</span>
             </label>
-            <input
-              id="hr-confirm-password"
-              className="input"
-              type={showConfirm ? "text" : "password"}
-              value={confirm}
-              onChange={(e) => setConfirm(e.target.value)}
-              placeholder="Re-enter your password"
-              autoComplete="new-password"
-              maxLength={200}
-              required
-            />
+            <div className="relative">
+              <input
+                id="hr-confirm-password"
+                className="input pr-11"
+                type={showConfirm ? "text" : "password"}
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                placeholder="Re-enter your password"
+                autoComplete="new-password"
+                maxLength={200}
+                required
+              />
+              <button
+                type="button"
+                className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-muted hover:text-body"
+                aria-label={showConfirm ? "Hide password" : "Show password"}
+                onClick={() => setShowConfirm((v) => !v)}
+              >
+                {eyeIcon}
+              </button>
+            </div>
             <span className="field-hint">Both passwords must match.</span>
           </div>
         </div>

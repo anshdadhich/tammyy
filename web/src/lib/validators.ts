@@ -188,9 +188,10 @@ export const jobSchema = z
       .default([])
       .transform((arr) => normalizeSkills(arr)),
     min_exp: z.coerce.number().min(0).max(50).default(0),
-    max_exp: z.coerce.number().min(0).max(50).default(5),
+    max_exp: z.coerce.number().min(0).max(50).default(50),
     salary_min: z.coerce.number().min(0).optional().default(0),
     salary_max: z.coerce.number().min(0).optional(),
+    salary_frequency: salaryFrequencySchema.default("yearly"),
     currency: z
       .string()
       .trim()

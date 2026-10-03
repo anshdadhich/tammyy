@@ -24,8 +24,8 @@ export default function SearchingPanel({ title }: { title: string }) {
 
   useEffect(() => {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      setStage(STAGES.length - 1);
-      return;
+      const t = window.setTimeout(() => setStage(STAGES.length - 1), 0);
+      return () => window.clearTimeout(t);
     }
     const t = window.setInterval(() => {
       setStage((s) => (s >= STAGES.length - 1 ? s : s + 1));

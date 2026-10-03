@@ -1,7 +1,26 @@
+function crossOrigin(request: Request): boolean {
+  const origin = request.headers.get("origin");
+  if (!origin || origin === "null") return false;
+  try {
+    return new URL(origin).host !== new URL(request.url).host;
+  } catch {
+    return true;
+  }
+}
+
 export async function readJsonBody(
   request: Request,
   maxBytes: number,
 ): Promise<{ ok: true; body: unknown } | { ok: false; response: Response; status: number }> {
+  // Defense-in-depth: SameSite=Lax blocks cross-site sends already; an
+  // explicit Origin check survives any future cookie change.
+  if (crossOrigin(request)) {
+    return {
+      ok: false,
+      response: Response.json({ error: "cross-origin request rejected" }, { status: 403 }),
+      status: 403,
+    };
+  }
   const ct = request.headers.get("content-type") ?? "";
   if (ct && !ct.toLowerCase().includes("application/json")) {
     return { ok: false, response: Response.json({ error: "content-type must be application/json" }, { status: 415 }), status: 415 };

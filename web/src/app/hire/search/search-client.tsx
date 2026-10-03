@@ -127,8 +127,10 @@ export default function SearchClient({ session }: Props) {
     setError("");
     setView("searching");
     setStatus(`Searching for ${parsed.data.title}…`);
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 90_000);
     try {
-      const json = (await postJson("/api/search", { job: parsed.data, deep })) as {
+      const json = (await postJson("/api/search", { job: parsed.data, deep }, { signal: controller.signal })) as {
         results?: SearchRow[];
         searchId?: string | null;
         deepError?: string;
@@ -150,6 +152,7 @@ export default function SearchClient({ session }: Props) {
       setError(e instanceof Error ? e.message : "Something went wrong");
       setView("compose");
     } finally {
+      window.clearTimeout(timer);
       setStatus("");
     }
   }

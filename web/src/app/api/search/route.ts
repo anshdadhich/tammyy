@@ -137,6 +137,7 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
     experience_max: seniorityBand && rangeUnconstrained ? seniorityBand.max : (j.max_exp ?? null),
     salary_min: j.salary_min ?? null,
     salary_max: j.salary_max ?? null,
+    salary_frequency: (j as { salary_frequency?: string }).salary_frequency ?? "yearly",
     location: j.location ?? null,
     remote_allowed: j.remote_policy === "remote",
     core_responsibilities: j.description ? [j.description] : [],
@@ -350,7 +351,32 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
       const candIds = [...new Set(mrows.map((m) => m.candidate_id).filter(Boolean))];
       const candDocs = candIds.length
         ? await db
-            .select()
+            .select({
+              id: schema.candidates.id,
+              full_name: schema.candidates.full_name,
+              headline: schema.candidates.headline,
+              domain: schema.candidates.domain,
+              total_experience_years: schema.candidates.total_experience_years,
+              min_salary: schema.candidates.min_salary,
+              salary_frequency: schema.candidates.salary_frequency,
+              linkedin_url: schema.candidates.linkedin_url,
+              github_url: schema.candidates.github_url,
+              portfolio_url: schema.candidates.portfolio_url,
+              resume_url: schema.candidates.resume_url,
+              photo_url: schema.candidates.photo_url,
+              profile_strength: schema.candidates.profile_strength,
+              remote_preference: schema.candidates.remote_preference,
+              location_city: schema.candidates.location_city,
+              availability_status: schema.candidates.availability_status,
+              updated_at: schema.candidates.updated_at,
+              show_email: schema.candidates.show_email,
+              show_phone: schema.candidates.show_phone,
+              show_linkedin: schema.candidates.show_linkedin,
+              show_github: schema.candidates.show_github,
+              show_portfolio: schema.candidates.show_portfolio,
+              show_resume: schema.candidates.show_resume,
+              show_photo: schema.candidates.show_photo,
+            })
             .from(schema.candidates)
             .where(
               and(
@@ -783,7 +809,7 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
   try {
     const top = rows.slice(0, 10);
     const topIds = top.map((r) => String(r.id ?? "")).filter((s): s is string => s.length > 0);
-    const [judgeCands, judgeProjs, judgeExps, judgeDepths] = await Promise.all([
+    const [judgeCands, judgeProjs, judgeExps, judgeDepths, judgeEdu, judgeOss, judgeSkillLinks, judgeSkillNames] = await Promise.all([
       topIds.length
         ? db
             .select({
@@ -852,6 +878,54 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
               ),
             )
         : Promise.resolve([] as Record<string, unknown>[]),
+      topIds.length
+        ? db
+            .select({
+              candidate_id: schema.education.candidate_id,
+              institution: schema.education.institution,
+              degree: schema.education.degree,
+              field_of_study: schema.education.field_of_study,
+            })
+            .from(schema.education)
+            .where(inArray(schema.education.candidate_id, topIds))
+            .limit(topIds.length * 4)
+        : Promise.resolve([] as Record<string, unknown>[]),
+      topIds.length
+        ? db
+            .select({
+              candidate_id: schema.openSourceContributions.candidate_id,
+              repo_name: schema.openSourceContributions.repo_name,
+              description: schema.openSourceContributions.description,
+              tech_stack: schema.openSourceContributions.tech_stack,
+            })
+            .from(schema.openSourceContributions)
+            .where(inArray(schema.openSourceContributions.candidate_id, topIds))
+            .limit(topIds.length * 6)
+        : Promise.resolve([] as Record<string, unknown>[]),
+      topIds.length
+        ? db
+            .select({
+              candidate_id: schema.candidateSkills.candidate_id,
+              skill_id: schema.candidateSkills.skill_id,
+            })
+            .from(schema.candidateSkills)
+            .where(inArray(schema.candidateSkills.candidate_id, topIds))
+            .limit(topIds.length * 50)
+        : Promise.resolve([] as Record<string, unknown>[]),
+      topIds.length
+        ? db
+            .select({ id: schema.skills.id, name: schema.skills.name })
+            .from(schema.skills)
+            .where(
+              inArray(
+                schema.skills.id,
+                db
+                  .select({ skill_id: schema.candidateSkills.skill_id })
+                  .from(schema.candidateSkills)
+                  .where(inArray(schema.candidateSkills.candidate_id, topIds)),
+              ),
+            )
+        : Promise.resolve([] as Record<string, unknown>[]),
     ]);
     const candById = new Map(
       (judgeCands as unknown as Record<string, unknown>[]).map((c) => [String(c.id), c]),
@@ -891,6 +965,43 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
       }
       projsById.set(cid, bucket);
     }
+    const judgeSkillNameById = new Map<string, string>();
+    for (const s of (judgeSkillNames as unknown as Record<string, unknown>[]) ?? []) {
+      if (typeof s.name === "string" && s.name) judgeSkillNameById.set(String(s.id), s.name);
+    }
+    const skillsById = new Map<string, string[]>();
+    for (const s of (judgeSkillLinks as unknown as Record<string, unknown>[]) ?? []) {
+      const cid = String(s.candidate_id ?? "");
+      const name = judgeSkillNameById.get(String(s.skill_id ?? ""));
+      if (!cid || !name) continue;
+      const arr = skillsById.get(cid) ?? [];
+      arr.push(name);
+      skillsById.set(cid, arr);
+    }
+    const eduById = new Map<string, Record<string, unknown>[]>();
+    for (const e of (judgeEdu as unknown as Record<string, unknown>[]) ?? []) {
+      const cid = String(e.candidate_id ?? "");
+      if (!cid) continue;
+      const bucket = eduById.get(cid) ?? [];
+      if (bucket.length < 4) {
+        const rest = { ...e };
+        delete rest.candidate_id;
+        bucket.push(rest);
+      }
+      eduById.set(cid, bucket);
+    }
+    const ossById = new Map<string, Record<string, unknown>[]>();
+    for (const o of (judgeOss as unknown as Record<string, unknown>[]) ?? []) {
+      const cid = String(o.candidate_id ?? "");
+      if (!cid) continue;
+      const bucket = ossById.get(cid) ?? [];
+      if (bucket.length < 6) {
+        const rest = { ...o };
+        delete rest.candidate_id;
+        bucket.push(rest);
+      }
+      ossById.set(cid, bucket);
+    }
     const inputs: JudgeInput[] = top.map((r) => {
       const cid = String(r.id ?? "");
       return {
@@ -900,6 +1011,9 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
           candidate: candById.get(cid) ?? r,
           work_experiences: expsById.get(cid) ?? [],
           projects: projsById.get(cid) ?? [],
+          skills: skillsById.get(cid) ?? [],
+          education: eduById.get(cid) ?? [],
+          open_source_contributions: ossById.get(cid) ?? [],
         },
       };
     });

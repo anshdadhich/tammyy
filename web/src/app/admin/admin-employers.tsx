@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { AdminEmployer } from "@/lib/admin-employers";
 
 type Status = "pending" | "verified" | "rejected" | "all";
@@ -44,6 +44,7 @@ export default function AdminEmployers({
   const [rows, setRows] = useState<AdminEmployer[]>(initialEmployers);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const busyRef = useRef(false);
   const [error, setError] = useState("");
   const [plans, setPlans] = useState<Record<string, string>>(
     () => Object.fromEntries(initialEmployers.map((r) => [r.id, r.plan ?? "free"])),
@@ -51,6 +52,7 @@ export default function AdminEmployers({
 
   async function load(next: Status): Promise<void> {
     setLoading(true);
+    setRows([]);
     setError("");
     try {
       const res = await fetch(`/api/admin/employers?status=${next}`, { cache: "no-store" });
@@ -73,7 +75,8 @@ export default function AdminEmployers({
   }
 
   async function act(employerId: string, action: Action, plan?: string): Promise<void> {
-    if (busy) return;
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(employerId);
     setError("");
     try {
@@ -94,19 +97,19 @@ export default function AdminEmployers({
     } catch {
       setError("Network error");
     } finally {
-      setBusy(null);
+      busyRef.current = false; setBusy(null);
     }
   }
 
   return (
     <div aria-busy={loading}>
-      <div className="flex flex-wrap items-center gap-2 mb-6" role="tablist" aria-label="Verification status filter">
+      <div className="flex flex-wrap items-center gap-2 mb-6" role="group" aria-label="Verification status filter">
         {TABS.map((tab) => (
           <button
             key={tab.value}
             type="button"
-            role="tab"
-            aria-selected={status === tab.value}
+            
+            aria-pressed={status === tab.value}
             className={status === tab.value ? "btn btn-sm press btn-primary" : "btn btn-sm press btn-secondary"}
             onClick={() => selectTab(tab.value)}
           >

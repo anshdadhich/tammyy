@@ -12,6 +12,7 @@ const PRUNE_EVERY = 500;
  */
 export class RateLimiter extends DurableObject<CloudflareEnv> {
   private buckets: Map<string, Bucket> | null = null;
+  private fetches = 0;
 
   private async load(): Promise<Map<string, Bucket>> {
     if (!this.buckets) {
@@ -62,7 +63,8 @@ export class RateLimiter extends DurableObject<CloudflareEnv> {
       const fresh: Bucket = { count: 1, resetAt: now + op.windowMs };
       buckets.set(op.key, fresh);
       await this.ctx.storage.kv.put(`rl:${op.key}`, fresh);
-      if (buckets.size % PRUNE_EVERY === 0) await this.prune(buckets);
+      this.fetches += 1;
+      if (this.fetches % PRUNE_EVERY === 0) await this.prune(buckets);
       return Response.json({ ok: true, remaining: op.limit - 1, retryAfterMs: 0 });
     }
     if (cur.count >= op.limit) {

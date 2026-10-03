@@ -351,7 +351,9 @@ export const shortlists = sqliteTable(
     candidate_id: text("candidate_id")
       .notNull()
       .references(() => candidates.id, { onDelete: "cascade" }),
-    job_id: text("job_id"),
+    // '' sentinel = "no job" so the unique index below treats it like any
+    // other value (SQLite considers NULLs distinct in unique indexes).
+    job_id: text("job_id").notNull().default(""),
     status: text("status"),
     notes: text("notes"),
     created_at: createdAt(),
@@ -359,6 +361,7 @@ export const shortlists = sqliteTable(
   (t) => [
     index("shortlists_candidate_idx").on(t.candidate_id),
     index("shortlists_employer_idx").on(t.employer_id, t.candidate_id),
+    uniqueIndex("shortlists_unique").on(t.employer_id, t.candidate_id, t.job_id),
   ],
 );
 

@@ -33,9 +33,15 @@ type AiEmbeddingResponse = {
 
 async function embedBatch(texts: string[]): Promise<number[][]> {
   const env = await cfEnv();
-  const res = await env.AI.run(EMBEDDING_MODEL as never, {
+  const run = env.AI.run(EMBEDDING_MODEL as never, {
     text: texts,
   } as never);
+  const res = (await Promise.race([
+    run,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("embedding timed out")), EMBEDDING_TIMEOUT_MS),
+    ),
+  ])) as unknown;
   const parsed = res as unknown as AiEmbeddingResponse;
   if (!parsed?.data || parsed.data.length !== texts.length) {
     throw new Error("embedding response malformed");

@@ -47,18 +47,6 @@ const VECTORIZE_MAX_FETCH = 600;
 const RRF_K = 60;
 const LEXICAL_LIMIT = 200;
 
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function compileFtsMatchers(terms: string[]): Array<RegExp | null> {
-  return terms.map((term) => {
-    const words = term.split(/\s+/).filter(Boolean);
-    if (!words.length) return null;
-    return new RegExp(`\\b${words.map(escapeRegExp).join("\\s+")}\\b`, "i");
-  });
-}
-
 /**
  * Lexical arm: rank chunks by how strongly the query terms appear in the
  * text. Exact-match counting is our BM25-lite — cheap enough to run inside
@@ -169,13 +157,8 @@ export async function matchChunks(params: MatchChunksParams): Promise<MatchChunk
   const ids = [...new Set(chunks.map((c) => c.candidate_id))];
 
   const db = await getDb();
-  const conds = [
-    inArray(schema.candidates.id, ids),
-    eq(schema.candidates.visibility_status, "visible"),
-  ];
-  if (params.p_candidate_ids?.length) {
-    conds.push(inArray(schema.candidates.id, params.p_candidate_ids));
-  }
+  const conds = [eq(schema.candidates.visibility_status, "visible")];
+  const allowedIds = params.p_candidate_ids?.length ? new Set(params.p_candidate_ids) : null;
   if (params.p_availability) {
     conds.push(eq(schema.candidates.availability_status, params.p_availability));
   }
@@ -216,11 +199,12 @@ export async function matchChunks(params: MatchChunksParams): Promise<MatchChunk
 
   const visibleIds = new Set<string>();
   for (let i = 0; i < ids.length; i += 90) {
-    const batch = ids.slice(i, i + 90);
+    const batch = ids.slice(i, i + 90).filter((id) => !allowedIds || allowedIds.has(id));
+    if (!batch.length) continue;
     const rows = await db
       .select({ id: schema.candidates.id })
       .from(schema.candidates)
-      .where(and(inArray(schema.candidates.id, batch), ...conds.slice(1)));
+      .where(and(inArray(schema.candidates.id, batch), ...conds));
     for (const r of rows) visibleIds.add(r.id);
   }
   if (!visibleIds.size) return [];

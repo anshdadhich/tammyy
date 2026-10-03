@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { randomUUID } from "crypto";
 import { after } from "next/server";
-import { and, desc, eq, inArray, isNull, lt, or } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, or } from "drizzle-orm";
 import { getDb, schema, type Db } from "@/db/client";
 import { newMatchEmail, sendEmail } from "@/lib/email";
 import { requireHrDb, getSessionUser } from "@/lib/auth-user";
@@ -48,7 +48,7 @@ function serializeShortlist(r: ShortlistRow): Record<string, unknown> {
     id: r.id,
     employer_id: r.employer_id ?? null,
     candidate_id: r.candidate_id,
-    job_id: r.job_id ?? null,
+    job_id: r.job_id || null,
     status: r.status,
     notes: r.notes ?? null,
     created_at: r.created_at,
@@ -271,7 +271,7 @@ export async function POST(request: Request) {
         id: randomUUID(),
         employer_id: employerId,
         candidate_id,
-        job_id: job_id ?? null,
+        job_id: job_id ?? "",
         status: "saved",
         notes: notes || null,
       })
@@ -295,9 +295,7 @@ export async function POST(request: Request) {
           and(
             eq(schema.shortlists.employer_id, employerId),
             eq(schema.shortlists.candidate_id, candidate_id),
-            job_id
-              ? eq(schema.shortlists.job_id, job_id)
-              : isNull(schema.shortlists.job_id),
+            eq(schema.shortlists.job_id, job_id ?? ""),
           ),
         )
         .limit(1);
@@ -454,9 +452,7 @@ export async function DELETE(request: Request) {
         and(
           eq(schema.shortlists.employer_id, employerId),
           eq(schema.shortlists.candidate_id, parsed.data.candidate_id),
-          parsed.data.job_id
-            ? eq(schema.shortlists.job_id, parsed.data.job_id)
-            : isNull(schema.shortlists.job_id),
+          eq(schema.shortlists.job_id, parsed.data.job_id ?? ""),
         ),
       );
   } catch {
