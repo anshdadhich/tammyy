@@ -29,6 +29,8 @@ type Cand = {
   contact_phone?: string | null;
   linkedin_url?: string | null;
   github_url?: string | null;
+  resume_url?: string | null;
+  portfolio_url?: string | null;
   freshness_updated_at?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
@@ -219,6 +221,8 @@ function buildFacts(c: Cand, profile: Prof): Fact[] {
   add("Phone", c.contact_phone);
   add("LinkedIn", c.linkedin_url, safeHttpUrl);
   add("GitHub", c.github_url, safeHttpUrl);
+  add("Portfolio", c.portfolio_url, safeHttpUrl);
+  add("Resume", c.resume_url, safeHttpUrl);
   add("Visibility", c.visibility_status);
   add("Profile strength", c.profile_strength);
   add("Summary updated", profile?.updated_at);

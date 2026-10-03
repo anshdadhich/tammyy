@@ -284,6 +284,26 @@ export default function CandidateDetail({ row, onBack }: Props) {
       ),
     });
   }
+  if (row.resume_url) {
+    facts.push({
+      label: "Resume",
+      node: (
+        <a className={LINK_CLASS} href={row.resume_url} target="_blank" rel="noopener noreferrer">
+          {row.resume_url}
+        </a>
+      ),
+    });
+  }
+  if (row.portfolio_url) {
+    facts.push({
+      label: "Portfolio",
+      node: (
+        <a className={LINK_CLASS} href={row.portfolio_url} target="_blank" rel="noopener noreferrer">
+          {row.portfolio_url}
+        </a>
+      ),
+    });
+  }
   if (row.github_url) {
     facts.push({
       label: "GitHub",

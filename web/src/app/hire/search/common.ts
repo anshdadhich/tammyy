@@ -71,6 +71,8 @@ export type SearchRow = {
   contact_phone?: string | null;
   linkedin_url?: string | null;
   github_url?: string | null;
+  resume_url?: string | null;
+  portfolio_url?: string | null;
   contact_locked?: boolean;
   overall_score?: number | null;
   match_level?: string | null;
