@@ -46,7 +46,7 @@ Score 4 dimensions (each 0-25):
 4. RED FLAGS (inverted: 25 = clean, 0 = severe): bootcamp clone, buzzword list with no context, role-complexity mismatch.
 Rules: use ONLY provided info, mark gaps explicitly, be critical and objective, no vague praise.
 Output STRICT JSON only, exactly this shape:
-{"total_score":0,"technical_depth_score":0,"relevance_score":0,"impact_score":0,"red_flags_score":0,"best_project_match":"","why_they_are_a_good_fit":"","potential_interview_questions":["",""],"weaknesses_or_gaps":"","matched_requirements":[],"missing_requirements":[],"strengths":[],"risk_factors":[]}`;
+{"total_score":0,"technical_depth_score":0,"relevance_score":0,"impact_score":0,"red_flags_score":0,"best_project_match":"","why_they_are_a_good_fit":"","potential_interview_questions":["",""],"weaknesses_or_gaps":"","matched_requirements":[],"missing_requirements":[],"strengths":[],"risk_factors":[],"salary_fit":"good|partial|poor","location_fit":"good|partial|poor","seniority_fit":"good|partial|poor"}`;
 
 export function buildJudgeUserPrompt(job: JobReq, candidateJson: unknown): string {
   return `JOB:\n${JSON.stringify(
@@ -151,6 +151,14 @@ function toScore(n: unknown): number {
   return Math.min(100, Math.max(0, Math.round(v)));
 }
 
+function toFit(v: unknown): "good" | "partial" | "poor" | "unknown" {
+  const s = String(v ?? "").trim().toLowerCase();
+  if (s === "good" || s === "strong" || s === "yes" || s === "fit") return "good";
+  if (s === "partial" || s === "medium" || s === "okay" || s === "ok") return "partial";
+  if (s === "poor" || s === "poor fit" || s === "weak" || s === "no" || s === "bad") return "poor";
+  return "unknown";
+}
+
 function toMatchLevel(total: number): MatchLevel {
   if (total >= 75) return "strong";
   if (total >= 50) return "partial";
@@ -203,9 +211,9 @@ export function parseJudgeOutput(
     strengths: strArr(raw.strengths),
     gaps: gapsStr,
     risk_factors: strArr(raw.risk_factors),
-    salary_fit: "unknown",
-    location_fit: "unknown",
-    seniority_fit: "unknown",
+    salary_fit: toFit(raw.salary_fit),
+    location_fit: toFit(raw.location_fit),
+    seniority_fit: toFit(raw.seniority_fit),
     recommendation:
       typeof raw.why_they_are_a_good_fit === "string"
         ? raw.why_they_are_a_good_fit

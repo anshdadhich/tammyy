@@ -89,6 +89,8 @@ export type SearchRun = {
   time: string;
   deep: boolean;
   note?: string;
+  /** True when retrieval/embedding failed and results are a fallback set. */
+  degraded?: boolean;
   results: SearchRow[];
 };
 

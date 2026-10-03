@@ -6,43 +6,27 @@ no unlock gate; `contact_log` is audit-only).
 
 Monorepo layout: `web/` (Next.js app: portfolio pages + HR search + JSON API) + `docs/` (blueprint).
 
-Data + auth live in MongoDB (no external services): email + password login with
-scrypt-hashed passwords and an httpOnly `tammy_session` cookie resolved against
-the `sessions` collection.
+Data + auth run entirely on Cloudflare: D1 (records + auth), Vectorize +
+Workers AI embeddings (semantic search), R2 (files), Workflows (the profile
+pipeline), Durable Objects (password hashing + rate limits). Email is custom
+scrypt passwords with an httpOnly `tammy_session` cookie resolved against the
+`sessions` table.
 
 The app includes the candidate profile flow, employer search, admin verification, and JSON API. Current UI routes are listed in `web/README.md`; route files under `web/src/app/` are the source of truth.
 
 ## Quickstart
 
-### 1. MongoDB
+### 1. Env vars (names only - copy `web/.env.example` to `web/.env.local`)
 
-Start a local MongoDB (8.x) — no schema to run; collections are created on demand:
+- `SESSION_SECRET` (signs lookup/email-change/ownership tokens)
+- `BOOTSTRAP_SECRET` (locks `/api/admin/bootstrap`)
+- `BOOTSTRAP_ADMIN_EMAIL` (pins which account bootstrap may promote)
+- `OPENROUTER_API_KEY` (optional - summary/depth/judge LLM; graceful no-op)
+- `JUDGE_MODEL` / `CHEAP_MODEL` (optional - model selection)
+- `RESEND_API_KEY` / `RESEND_FROM` (optional - email sends are graceful no-ops)
+- `NEXT_PUBLIC_SITE_URL` (used in email links)
 
-- `MONGODB_URI` defaults to `mongodb://127.0.0.1:27017`
-- `MONGODB_DB` defaults to `tammy`
-
-Optional demo data (canonical skills + demo candidates so search works without a Voyage key):
-
-```bash
-cd web
-node scripts/seed-mongo.mjs
-```
-
-### 2. Env vars (names only - copy `web/.env.example` to `web/.env.local`)
-
-- `MONGODB_URI`, `MONGODB_DB` (optional - defaults work locally)
-- `VOYAGE_API_KEY`
-- `OPENROUTER_API_KEY`
-- `JUDGE_MODEL`
-- `INNGEST_EVENT_KEY`
-- `INNGEST_SIGNING_KEY`
-- `RESEND_API_KEY` (optional - email sends are graceful no-ops without it)
-- `RESEND_FROM` (optional - defaults to Resend onboarding sender)
-- `SESSION_SECRET` (recommended on prod - signs lookup/email-change tokens)
-- `BOOTSTRAP_SECRET` (recommended on prod - locks `/api/admin/bootstrap`)
-- `NEXT_PUBLIC_SITE_URL` (optional - used in email links)
-
-### 3. Run the app
+### 2. Run the app
 
 ```bash
 cd web
@@ -52,25 +36,19 @@ npm run dev        # http://localhost:3000
 
 Pages include `/`, `/join`, `/talent/[id]`, `/hire`, `/hire/login`, `/hire/search`, `/admin`, `/settings`.
 
-### 4. Inngest dev (background pipeline: normalize → summary → depth → chunks → embed)
+### 3. Background pipeline (normalize -> summary -> depth -> chunks -> embed)
 
-```bash
-cd web
-npx inngest-cli@latest dev   # serves local worker; app endpoint is /api/webhooks/inngest
-```
+Runs as a Cloudflare Workflow (`profile-pipeline`): one durable step per
+stage, resumes after crashes, triggered from `/api/candidates` and
+`/api/candidates/summary`. No external worker service needed.
 
-If Inngest is offline, `POST /api/candidates` still saves the profile (202) and
-the worker picks it up later.
-
-### 5. QA smoke
+### 4. QA smoke
 
 ```bash
 BASE_URL=http://localhost:3000 bash web/scripts/smoke.sh
-# Windows:
-#   $env:BASE_URL="http://localhost:3000"; powershell -File web/scripts/smoke.ps1
 ```
 
-Checks `GET /` → 200 and expected unauthenticated API responses.
+Checks `GET /` -> 200 and expected unauthenticated API responses.
 
 ## API cheatsheet
 
@@ -93,7 +71,7 @@ The whole stack runs on Cloudflare: Workers (Next.js via `@opennextjs/cloudflare
 cd web
 npx wrangler d1 create tammy            # paste the database_id into wrangler.jsonc
 npx wrangler r2 bucket create tammy-media
-npx wrangler vectorize index create tammy-profile-chunks --dimensions=384 --metric=cosine
+npx wrangler vectorize index create tammy-profile-chunks-512 --dimensions=512 --metric=cosine
 ```
 
 ### 2. Apply the D1 schema
@@ -127,7 +105,7 @@ Then sign up and promote the admin once:
 ### Capacity notes (free tier)
 
 - Workers: 100k requests/day. Password hashing runs in a Durable Object (30s CPU) because no production-strength hash fits the 10ms request budget; search similarity runs in Vectorize for the same reason.
-- Vectorize free: 5M stored dimensions ≈ 13k chunks at 384 dims (~2k candidates at 6 chunks each, ~13k at 1 chunk). This is the first limit to watch; $5/mo Workers Paid doubles it.
+- Vectorize free: 5M stored dimensions ≈ 9.7k chunks at 512 dims (qwen3-embedding-0.6b MRL-truncated from 1024). This is the first limit to watch; $5/mo Workers Paid doubles it.
 - D1 free: 500MB (~100k candidate rows once vectors live in Vectorize).
 - R2 free: 10GB, zero egress. Presigned PUTs keep upload bytes off the Worker entirely.
 - File uploads store `{uuid}/{filename}` keys; access control stays in `GET /api/uploads`, which re-checks the session (and emits presigned GETs when R2 S3 credentials are configured).

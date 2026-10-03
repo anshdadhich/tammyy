@@ -134,6 +134,7 @@ export default function SearchClient({ session }: Props) {
         results?: SearchRow[];
         searchId?: string | null;
         deepError?: string;
+        degraded?: boolean;
       };
       const results = Array.isArray(json.results) ? json.results : [];
       const run: SearchRun = {
@@ -144,6 +145,12 @@ export default function SearchClient({ session }: Props) {
         results,
       };
       if (json.deepError) run.note = json.deepError;
+      if (json.degraded) {
+        run.degraded = true;
+        run.note = run.note
+          ? `${run.note} · semantic matching degraded, showing fallback results`
+          : "Semantic matching degraded — showing fallback results, not ranked matches.";
+      }
       setRuns((prev) => [run, ...prev]);
       setActiveId(run.id);
       setSelectedId(results[0]?.id ?? null);

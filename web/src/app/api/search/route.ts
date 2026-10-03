@@ -509,22 +509,32 @@ export const POST = withWideEvent("/api/search", async (request, wev) => {
 
   let rows: Record<string, unknown>[] = [];
   if (chunks.length) {
-    const byCand = new Map<string, { best: number; hits: Chunk[] }>();
+    const byCand = new Map<string, { best: number; bestScore: number; hits: Chunk[] }>();
     for (const c of chunks) {
       if (!c.candidate_id) continue;
       let g = byCand.get(c.candidate_id);
       if (!g) {
-        g = { best: Infinity, hits: [] };
+        g = { best: Infinity, bestScore: -Infinity, hits: [] };
         byCand.set(c.candidate_id, g);
       }
       const d = typeof c.distance === "number" ? c.distance : Infinity;
       if (d < g.best) g.best = d;
+      const fs = typeof c.fused_score === "number" ? c.fused_score : -Infinity;
+      if (fs > g.bestScore) g.bestScore = fs;
       if (g.hits.length < PER_CANDIDATE_CHUNKS) g.hits.push(c);
     }
     for (const g of byCand.values()) {
-      g.hits.sort((a, b) => (a.distance ?? Infinity) - (b.distance ?? Infinity));
+      // Rank hits inside a candidate by fused score (RRF), fall back to
+      // cosine distance when absent.
+      g.hits.sort((a, b) => {
+        const as = typeof a.fused_score === "number" ? a.fused_score : -Infinity;
+        const bs = typeof b.fused_score === "number" ? b.fused_score : -Infinity;
+        return bs !== as ? bs - as : (a.distance ?? Infinity) - (b.distance ?? Infinity);
+      });
     }
-    const ranked = [...byCand.entries()].sort((a, b) => a[1].best - b[1].best).slice(0, limit);
+    const ranked = [...byCand.entries()]
+      .sort((a, b) => b[1].bestScore - a[1].bestScore || a[1].best - b[1].best)
+      .slice(0, limit);
     const ids = ranked.map(([id]) => id);
     if (ids.length) {
       const cands = await db

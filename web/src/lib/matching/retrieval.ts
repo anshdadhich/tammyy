@@ -58,12 +58,11 @@ function lexicalScore(text: string, terms: string[]): number {
   for (const term of terms) {
     const w = term.trim().toLowerCase();
     if (w.length < 2) continue;
-    let hits = 0;
-    let idx = 0;
-    while ((idx = t.indexOf(w, idx)) !== -1) {
-      hits += 1;
-      idx += w.length;
-    }
+    // Whole-token matches only — a bare substring count would let "go" match
+    // "google" and "js" match ".js".
+    const escaped = w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`(?<![A-Za-z0-9_])${escaped}(?![A-Za-z0-9_])`, "g");
+    const hits = t.match(re)?.length ?? 0;
     if (hits > 0) score += 1 + Math.min(hits - 1, 3) * 0.25;
   }
   return score;
@@ -76,15 +75,19 @@ async function lexicalArm(
   const scores = new Map<string, number>();
   if (!terms.length) return scores;
   const db = await getDb();
+  // Order by recency so the bounded scan is deterministic, and select
+  // chunk_type so the allow-list filter can actually apply.
   const rows = await db
     .select({
       id: schema.profileChunks.id,
+      chunk_type: schema.profileChunks.chunk_type,
       content_text: schema.profileChunks.content_text,
     })
     .from(schema.profileChunks)
+    .orderBy(desc(schema.profileChunks.created_at))
     .limit(LEXICAL_LIMIT * 3);
   for (const r of rows) {
-    if (chunkTypes && !chunkTypes.has(String((r as unknown as { chunk_type?: string }).chunk_type ?? ""))) continue;
+    if (chunkTypes && !chunkTypes.has(r.chunk_type)) continue;
     const s = lexicalScore(r.content_text, terms);
     if (s > 0) scores.set(r.id, s);
     if (scores.size >= LEXICAL_LIMIT * 2) break;
@@ -311,12 +314,3 @@ export async function deleteChunksForCandidate(candidateId: string): Promise<voi
   await env.VECTORS.deleteByIds(rows.map((r) => r.id));
 }
 
-export async function recentChunkVectorIds(limit: number): Promise<string[]> {
-  const db = await getDb();
-  const rows = await db
-    .select({ id: schema.profileChunks.id })
-    .from(schema.profileChunks)
-    .orderBy(desc(schema.profileChunks.created_at))
-    .limit(limit);
-  return rows.map((r) => r.id);
-}

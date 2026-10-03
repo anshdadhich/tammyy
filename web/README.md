@@ -19,7 +19,6 @@ npm run dev     # http://localhost:3000
 - `/hire/search` - employer candidate search
 - `/admin` - employer verification queue
 - `/settings` - session and theme settings
-- `/auth/confirm` - passwordless email link confirmation
 
 ## Endpoints
 
@@ -30,7 +29,6 @@ npm run dev     # http://localhost:3000
 - `POST /api/shortlists` / `GET /api/shortlists?candidate_id=...`
 - `POST /api/contacts` (HR outreach, audit + best-effort email)
 - `POST /api/uploads` (photo/resume, after the candidate row exists)
-- `POST /api/webhooks/inngest` (background worker endpoint)
 
 The API also includes OTP auth, profile lookup and batch reads, file uploads,
 session management, and admin endpoints. Route handlers under `src/app/api/`

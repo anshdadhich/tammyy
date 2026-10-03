@@ -36,6 +36,7 @@ export function buildChunks(input: {
   skills: string[];
   experiences: { company_name: string; job_title: string; description: string | null }[];
   projects: { id: string; title: string; description: string; tech_stack: string[]; impact_summary: string | null }[];
+  oss?: { repo_name: string; description: string | null; tech_stack: string[] }[];
 }): Array<{ id: string; chunk_type: string; content_text: string; metadata_json: Record<string, unknown> }> {
   const expText = input.experiences
     .slice(0, 5)
@@ -49,6 +50,12 @@ export function buildChunks(input: {
     .trim()
     .slice(0, 2000);
 
+  const ossText = (input.oss ?? [])
+    .slice(0, 5)
+    .map((o) => `${o.repo_name}: ${o.description ?? ""} Tech: ${(o.tech_stack ?? []).join(", ")}`)
+    .join(". ")
+    .slice(0, 1500);
+
   const base = [
     {
       id: "summary",
@@ -60,6 +67,29 @@ export function buildChunks(input: {
         technologies: input.skills.slice(0, 20),
       },
     },
+    ...(expText
+      ? [{
+          id: "experience",
+          chunk_type: "experience",
+          content_text: `Experience: ${expText}`.slice(0, 2000),
+          metadata_json: {
+            chunk_type: "experience",
+            domain_tags: [input.domain].filter(Boolean),
+            technologies: input.skills.slice(0, 20),
+          },
+        }]
+      : []),
+    ...(ossText
+      ? [{
+          id: "open-source",
+          chunk_type: "skills",
+          content_text: `Open source: ${ossText}`.slice(0, 2000),
+          metadata_json: {
+            chunk_type: "skills",
+            domain_tags: [input.domain].filter(Boolean),
+          },
+        }]
+      : []),
     ...input.projects.slice(0, 5).map((p) => ({
       id: p.id,
       chunk_type: "project",
@@ -112,6 +142,7 @@ export class ProfilePipelineWorkflow extends WorkflowEntrypoint<Env, Params> {
       projects: ProjectRow[];
       experiences: ExperienceRow[];
       skills: string[];
+      oss: { repo_name: string; description: string | null; tech_stack: string[] }[];
     } = await step.do("load-profile", async () => {
       const db = await getDb();
       const candRows = await db
@@ -144,15 +175,29 @@ export class ProfilePipelineWorkflow extends WorkflowEntrypoint<Env, Params> {
             .from(schema.skills)
             .where(inArray(schema.skills.id, skillIds))
         : [];
+      const ossRows = await db
+        .select({
+          repo_name: schema.openSourceContributions.repo_name,
+          description: schema.openSourceContributions.description,
+          tech_stack: schema.openSourceContributions.tech_stack,
+        })
+        .from(schema.openSourceContributions)
+        .where(eq(schema.openSourceContributions.candidate_id, candidateId))
+        .limit(10);
       return {
         candidate,
         projects,
         experiences,
         skills: skillRows.map((s) => s.name).filter(Boolean),
+        oss: ossRows.map((o) => ({
+          repo_name: o.repo_name,
+          description: o.description,
+          tech_stack: o.tech_stack ?? [],
+        })),
       };
     });
 
-    const { candidate, projects, experiences, skills } = bundle;
+    const { candidate, projects, experiences, skills, oss } = bundle;
 
     if (candidate.visibility_status && candidate.visibility_status !== "visible") {
       return;
@@ -249,6 +294,11 @@ export class ProfilePipelineWorkflow extends WorkflowEntrypoint<Env, Params> {
           tech_stack: p.tech_stack ?? [],
           impact_summary: p.impact_summary,
         })),
+        oss: oss.map((o) => ({
+          repo_name: o.repo_name,
+          description: o.description,
+          tech_stack: o.tech_stack ?? [],
+        })),
       });
       if (!chunks.length) return { count: 0 };
 
@@ -317,6 +367,13 @@ export class ProfilePipelineWorkflow extends WorkflowEntrypoint<Env, Params> {
         }
         await db.delete(schema.profileChunks).where(inArray(schema.profileChunks.id, staleIds));
       }
+      // Bump the candidate row so search cache invalidation (corpusUnchanged
+      // checks candidates.updated_at) sees pipeline enrichment, not just
+      // owner edits.
+      await db
+        .update(schema.candidates)
+        .set({ updated_at: new Date().toISOString() })
+        .where(eq(schema.candidates.id, candidateId));
       return { count: chunks.length };
     });
 

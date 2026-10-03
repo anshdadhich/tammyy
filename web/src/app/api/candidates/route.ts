@@ -16,6 +16,7 @@ import {
   verifyEmailChangeToken,
 } from "@/lib/api-auth";
 import { deleteObject } from "@/lib/storage";
+import { deleteChunksForCandidate } from "@/lib/matching/retrieval";
 import {
   requireHrDb,
   requireOwnerDb,
@@ -677,7 +678,9 @@ export async function POST(request: Request) {
     salary_negotiable: c.negotiable ?? true,
     availability_status: avail,
     notice_period: (c.notice_period ?? "").trim().slice(0, 200) || null,
-    visibility_status: "hidden",
+    // Honor the wizard's chosen visibility; hidden profiles are not
+    // embedded until shown (PATCH re-enqueues the pipeline).
+    visibility_status: c.visibility === "visible" ? "visible" : "hidden",
     consent_status: "pending",
     show_email: c.show_email === true,
     show_phone: c.show_phone === true,
@@ -876,6 +879,11 @@ export async function PATCH(request: Request) {
       .returning({ id: schema.candidates.id, visibility_status: schema.candidates.visibility_status });
     const row = updated[0];
     if (!row) return Response.json({ error: "candidate not found" }, { status: 404 });
+    if (parsed.data.visibility_status === "visible") {
+      // First time shown (or re-shown): run the pipeline so the profile is
+      // embedded and searchable. Hidden profiles are skipped by the workflow.
+      await enqueuePipeline(parsed.data.id);
+    }
     return Response.json({ candidate: { id: row.id, visibility_status: row.visibility_status } });
   } catch {
     return Response.json({ error: "candidate not found" }, { status: 404 });
@@ -1529,11 +1537,35 @@ export async function DELETE(request: Request) {
   } catch {
     doomed = null;
   }
+  // Remove search-indexed vectors first: D1 rows cascade, Vectorize does not.
+  try {
+    await deleteChunksForCandidate(id as string);
+  } catch (e) {
+    console.error("[candidates] vector cleanup failed", redactPii((e as Error)?.message ?? String(e)));
+  }
+  let doomedUserId: string | null = null;
+  try {
+    const rows = await db
+      .select({ user_id: schema.candidates.user_id })
+      .from(schema.candidates)
+      .where(eq(schema.candidates.id, id as string))
+      .limit(1);
+    doomedUserId = rows[0]?.user_id ?? null;
+  } catch {
+    doomedUserId = null;
+  }
   try {
     await cascadeDeleteCandidate(db, id as string);
   } catch {
     console.error("[candidates] delete failed");
     return Response.json({ error: "candidate delete failed" }, { status: 500 });
+  }
+  // Revoke any live sessions for the deleted profile's account.
+  if (doomedUserId) {
+    try {
+      await db.delete(schema.sessions).where(eq(schema.sessions.user_id, doomedUserId));
+    } catch {
+    }
   }
   try {
     const jobs: Promise<void>[] = [];
