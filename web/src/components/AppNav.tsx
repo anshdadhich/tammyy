@@ -229,11 +229,6 @@ export default function AppNav({
                   <Link href="/settings" className="nav-menu-item" role="menuitem" onClick={closeAll}>
                     Settings
                   </Link>
-                  {viewer.isAdmin && (
-                    <Link href="/admin" className="nav-menu-item" role="menuitem" onClick={closeAll}>
-                      Admin console
-                    </Link>
-                  )}
                   <button type="button" className="nav-menu-item" role="menuitem" onClick={logout}>
                     Log out
                   </button>

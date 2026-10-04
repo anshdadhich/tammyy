@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Candidate profile — demo</title>
+<link rel="stylesheet" href="base.css">
+<link rel="stylesheet" href="utilities.css">
+<style>
+  body { max-width: none; }
+  .demo-note {
+    position: fixed; right: 16px; bottom: 16px; z-index: 999;
+    background: var(--ink); color: var(--paper);
+    padding: 8px 14px; border-radius: 999px;
+    font-size: 12px; opacity: .85;
+  }
+</style>
+</head>
+<body>
+
+<header class="site-navbar-wrap">
+  <div class="site-navbar" style="padding-inline:max(24px,calc((100% - 1160px)/2))">
+    <a href="#" class="site-brand site-brand-text">Tammy</a>
+    <nav class="site-navigation" aria-label="Main navigation">
+      <div class="site-nav-links">
+        <a href="#" class="site-nav-link press is-active">Candidates<span class="site-nav-pill" aria-hidden="true" style="opacity:1"></span></a>
+        <a href="#" class="site-nav-link press">Employers</a>
+        <a href="#" class="site-nav-link press">Match engine</a>
+        <a href="#" class="site-nav-link press">FAQ</a>
+      </div>
+    </nav>
+  </div>
+</header>
+
+<section class="pt-20 lg:pt-28 pb-8">
+  <div class="max-w-[1160px] mx-auto px-6">
+    <div class="rise flex flex-wrap items-center gap-3" style="--d:60ms">
+      <span class="meta-chip">Talent record</span>
+    </div>
+
+    <div class="rise mt-5 flex flex-wrap items-start justify-between gap-6" style="--d:160ms">
+      <div class="flex items-center gap-4 min-w-0">
+        <span aria-hidden="true" class="talent-avatar grid place-items-center bg-brand-soft text-brand-text font-semibold select-none" style="font-size:25px">AR</span>
+        <div class="min-w-0">
+          <h1 style="font-size:clamp(2rem,4.5vw,3.25rem);font-weight:600;letter-spacing:-0.03em;line-height:1.06;color:var(--ink)">Aarav Mehta</h1>
+          <p style="font-size:16px;color:var(--body);margin-top:6px;max-width:52ch">Backend engineer building delivery platforms — Node.js, PostgreSQL, Redis</p>
+        </div>
+      </div>
+      <div class="flex flex-wrap items-center gap-2.5">
+        <a class="btn btn-primary btn-sm press">Email</a>
+        <a class="btn btn-secondary btn-sm press">LinkedIn</a>
+        <a class="btn btn-secondary btn-sm press">GitHub</a>
+        <a class="btn btn-secondary btn-sm press">Resume</a>
+      </div>
+    </div>
+
+    <div class="rise mt-5 flex flex-wrap gap-2.5" style="--d:280ms">
+      <span class="meta-chip">Backend Development</span>
+      <span class="meta-chip">2 yrs experience</span>
+      <span class="meta-chip">Pune</span>
+      <span class="meta-chip">Remote</span>
+      <span class="meta-chip">Immediate</span>
+      <span class="meta-chip">₹80,000 / month</span>
+    </div>
+  </div>
+</section>
+
+<section class="pb-24">
+  <div class="max-w-[1160px] mx-auto px-6">
+    <div class="grid gap-10 lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start">
+
+      <div class="min-w-0">
+        <div class="talent-summary rise">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="meta-chip">AI summary</span>
+            <span class="field-hint">Updated 2026-10-03</span>
+          </div>
+          <div class="talent-summary-body">
+            <p>Backend engineer focused on delivery and logistics platforms, currently building a realtime delivery tracker in Node.js with Postgres and Redis. The clearest evidence of depth is the tracker’s schema design and caching layer — she reports cutting p95 latency from 800ms to 250ms on 500 concurrent connections (project impact line).</p>
+            <p>Skills cluster around Node.js, PostgreSQL, and Redis with Socket.io for realtime work. Outcomes are concrete: latency reduction, connection scale, and ownership of the backend end-to-end as sole engineer on the tracker.</p>
+            <p>Constraints: remote-preferred, immediate availability, ₹80k/month expectation (negotiable). Education details are thin in the profile.</p>
+            <p><strong>Weakest evidence:</strong> system-design breadth beyond the single main project — worth probing in interview.</p>
+          </div>
+        </div>
+
+        <p class="sq-overline">Profile facts</p>
+        <dl class="grid gap-x-10 lg:grid-cols-2 sq-facts mt-3">
+          <div class="sq-detail-row"><dt>Full name</dt><dd>Aarav Mehta</dd></div>
+          <div class="sq-detail-row"><dt>Domain</dt><dd>Backend Development</dd></div>
+          <div class="sq-detail-row"><dt>Experience (years)</dt><dd>2</dd></div>
+          <div class="sq-detail-row"><dt>City</dt><dd>Pune</dd></div>
+          <div class="sq-detail-row"><dt>Availability</dt><dd>Immediate</dd></div>
+          <div class="sq-detail-row"><dt>Minimum salary</dt><dd>80000 INR / month</dd></div>
+          <div class="sq-detail-row"><dt>LinkedIn</dt><dd><a href="#" class="underline">linkedin.com/in/aarav</a></dd></div>
+          <div class="sq-detail-row"><dt>Resume</dt><dd><a href="#" class="underline">drive.google.com/…</a></dd></div>
+        </dl>
+
+        <p class="sq-overline mt-10">Work experience</p>
+        <div class="mt-3">
+          <div class="rounded-2xl border border-line bg-surface p-5 mt-3">
+            <div class="flex flex-wrap items-baseline justify-between gap-2">
+              <p class="text-[15px] font-semibold text-ink">Backend Engineer</p>
+              <span class="field-hint">Jan 2024 – Present</span>
+            </div>
+            <p class="mt-0.5 text-[13.5px] text-body">LogiCore Systems</p>
+            <p class="mt-2 text-[13.5px] text-body leading-relaxed">Owned delivery APIs and schema design; introduced Redis caching that cut p95 800ms → 250ms.</p>
+            <div class="flex flex-wrap gap-2 mt-3">
+              <span class="tag">Node.js</span><span class="tag">PostgreSQL</span><span class="tag">Redis</span>
+            </div>
+          </div>
+        </div>
+
+        <p class="sq-overline mt-10">Projects</p>
+        <div class="mt-3">
+          <div class="rounded-2xl border border-line bg-surface p-5 mt-3">
+            <div class="flex flex-wrap items-baseline justify-between gap-2">
+              <p class="text-[15px] font-semibold text-ink">Delivery tracker</p>
+              <span class="field-hint">Lead Engineer · production</span>
+            </div>
+            <div class="flex flex-wrap gap-2 mt-2">
+              <span class="tag">Depth 8/10</span>
+              <span class="tag">Evidence: strong</span>
+            </div>
+            <p class="mt-2 text-[13.5px] text-body leading-relaxed"><strong>Problem:</strong> Realtime delivery tracking at 500 concurrent connections.</p>
+            <p class="mt-1.5 text-[13.5px] text-body leading-relaxed"><strong>Impact:</strong> p95 latency 800ms → 250ms; sole backend owner.</p>
+            <div class="flex flex-wrap gap-2 mt-3">
+              <span class="tag">Node.js</span><span class="tag">Socket.io</span><span class="tag">Redis</span>
+            </div>
+          </div>
+          <div class="rounded-2xl border border-line bg-surface p-5 mt-3">
+            <div class="flex flex-wrap items-baseline justify-between gap-2">
+              <p class="text-[15px] font-semibold text-ink">Invoice SaaS</p>
+              <span class="field-hint">Solo · production</span>
+            </div>
+            <div class="flex flex-wrap gap-2 mt-2">
+              <span class="tag">Depth 7/10</span>
+              <span class="tag">Evidence: moderate</span>
+            </div>
+            <p class="mt-2 text-[13.5px] text-body leading-relaxed"><strong>Impact:</strong> 200 paying users, Stripe billing, PDF generation.</p>
+            <div class="flex flex-wrap gap-2 mt-3">
+              <span class="tag">Next.js</span><span class="tag">Supabase</span><span class="tag">Stripe</span>
+            </div>
+          </div>
+        </div>
+
+        <p class="sq-overline mt-10">Education</p>
+        <div class="mt-3">
+          <div class="rounded-2xl border border-line bg-surface p-5 mt-3">
+            <p class="text-[15px] font-semibold text-ink">Savitribai Phule Pune University</p>
+            <p class="mt-0.5 text-[13.5px] text-body">B.E., Computer Engineering — 2021</p>
+          </div>
+        </div>
+
+        <p class="sq-overline mt-10">Skills</p>
+        <div class="flex flex-wrap gap-2 mt-3">
+          <span class="tag">Node.js</span>
+          <span class="tag">PostgreSQL</span><span class="tag">Redis</span>
+          <span class="tag">Socket.io</span><span class="tag">TypeScript</span>
+          <span class="tag">Docker</span>
+        </div>
+      </div>
+
+      <aside class="grid gap-5 lg:sticky lg:top-24">
+        <div class="rounded-2xl bg-surface shadow-soft-md p-6">
+          <p class="text-[13px] font-mono uppercase tracking-[0.12em] text-muted">At a glance</p>
+          <dl class="mt-3 grid gap-2.5">
+            <div class="flex items-baseline justify-between gap-3"><dt class="text-[13px] text-muted">Role</dt><dd class="text-[13.5px] font-medium text-ink text-right">Backend Engineer</dd></div>
+            <div class="flex items-baseline justify-between gap-3"><dt class="text-[13px] text-muted">Domain</dt><dd class="text-[13.5px] font-medium text-ink text-right">Backend Development</dd></div>
+            <div class="flex items-baseline justify-between gap-3"><dt class="text-[13px] text-muted">Experience</dt><dd class="text-[13.5px] font-medium text-ink text-right">2 years</dd></div>
+            <div class="flex items-baseline justify-between gap-3"><dt class="text-[13px] text-muted">Mode</dt><dd class="text-[13.5px] font-medium text-ink text-right">Remote</dd></div>
+            <div class="flex items-baseline justify-between gap-3"><dt class="text-[13px] text-muted">Availability</dt><dd class="text-[13.5px] font-medium text-ink text-right">Immediate</dd></div>
+            <div class="flex items-baseline justify-between gap-3"><dt class="text-[13px] text-muted">Expected</dt><dd class="text-[13.5px] font-medium text-ink text-right">₹80,000 / month</dd></div>
+          </dl>
+        </div>
+        <div class="rounded-2xl bg-surface shadow-soft-md p-6">
+          <p class="text-[14px] leading-[1.6] text-body">Hiring for something like this?</p>
+          <a class="btn btn-primary btn-sm press" style="margin-top:14px">Run a search</a>
+        </div>
+      </aside>
+
+    </div>
+  </div>
+</section>
+
+<div class="demo-note">Demo preview — candidate profile page</div>
+</body>
+</html>

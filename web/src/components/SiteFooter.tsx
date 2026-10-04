@@ -46,9 +46,9 @@ export default function SiteFooter() {
         <div className="footer-simple-bottom">
           <span>© 2026 Tammy Technologies Inc.</span>
           <nav aria-label="Legal">
-            <a href="mailto:hiya@tammy.sh?subject=Privacy">Privacy</a>
-            <a href="mailto:hiya@tammy.sh?subject=Terms">Terms</a>
-            <a href="mailto:hiya@tammy.sh?subject=Security">Security</a>
+            <Link href="/privacy">Privacy</Link>
+            <Link href="/terms">Terms</Link>
+            <Link href="/refund">Refunds</Link>
           </nav>
         </div>
       </div>

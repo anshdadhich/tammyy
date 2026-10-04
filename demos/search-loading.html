@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Search loading — demo</title>
+<link rel="stylesheet" href="base.css">
+<link rel="stylesheet" href="utilities.css">
+<style>
+  body { max-width: none; }
+  .demo-note {
+    position: fixed; right: 16px; bottom: 16px; z-index: 999;
+    background: var(--ink); color: var(--paper);
+    padding: 8px 14px; border-radius: 999px;
+    font-size: 12px; opacity: .85;
+  }
+  /* Live-demo JS: advances stages + clock so you can see the motion */
+</style>
+</head>
+<body>
+
+<header class="site-navbar-wrap">
+  <div class="site-navbar" style="padding-inline:max(24px,calc((100% - 1160px)/2))">
+    <a href="#" class="site-brand site-brand-text">Tammy</a>
+    <nav class="site-navigation" aria-label="Main navigation">
+      <div class="site-nav-links">
+        <a href="#" class="site-nav-link press">Candidates</a>
+        <a href="#" class="site-nav-link press is-active">Employers<span class="site-nav-pill" aria-hidden="true" style="opacity:1"></span></a>
+        <a href="#" class="site-nav-link press">Match engine</a>
+        <a href="#" class="site-nav-link press">FAQ</a>
+      </div>
+    </nav>
+  </div>
+</header>
+
+<section class="max-w-[600px] mx-auto pt-16 lg:pt-24 pb-10">
+  <div class="text-center">
+    <div class="sq-orb mx-auto" aria-hidden="true">
+      <div class="sq-orb-ring"></div>
+      <div class="sq-orb-ring sq-orb-ring-2"></div>
+      <div class="sq-orb-dot"></div>
+    </div>
+
+    <h1 style="margin-top:28px;font-size:clamp(1.5rem,3.4vw,2.15rem);font-weight:600;letter-spacing:-0.02em;line-height:1.12;color:var(--ink)">
+      Searching for Backend Engineer
+    </h1>
+    <p class="mt-2 text-[14.5px] text-muted">
+      Evidence is being read, not just keywords matched — this takes a few seconds.
+    </p>
+  </div>
+
+  <div class="search-progress mt-8" aria-hidden="true">
+    <div class="search-progress-fill" id="progressFill" style="width:22%"></div>
+    <div class="sq-bar-sweep"><i></i></div>
+  </div>
+  <div class="flex items-baseline justify-between mt-2 text-[12px] text-muted font-mono">
+    <span id="elapsed">0s elapsed</span>
+    <span>Deep read can take up to a minute</span>
+  </div>
+
+  <ul class="sq-stage-list" id="stageList">
+    <li class="sq-stage stage-row is-done" style="--i:0">
+      <span class="sq-stage-ic" aria-hidden="true">✓</span>
+      <span class="sq-stage-body">
+        <span class="sq-stage-label">Parse brief</span>
+        <span class="sq-stage-sub">Reading role, stack, and constraints</span>
+      </span>
+      <span class="sq-stage-state">done</span>
+    </li>
+    <li class="sq-stage stage-row is-done" style="--i:1">
+      <span class="sq-stage-ic" aria-hidden="true">✓</span>
+      <span class="sq-stage-body">
+        <span class="sq-stage-label">Embed query</span>
+        <span class="sq-stage-sub">Turning the brief into a semantic vector</span>
+      </span>
+      <span class="sq-stage-state">done</span>
+    </li>
+    <li class="sq-stage stage-row is-active" style="--i:2">
+      <span class="sq-stage-ic" aria-hidden="true">3</span>
+      <span class="sq-stage-body">
+        <span class="sq-stage-label">Hybrid retrieval</span>
+        <span class="sq-stage-sub">Vector + keyword candidate recall</span>
+      </span>
+      <span class="sq-stage-state is-running">running</span>
+    </li>
+    <li class="sq-stage stage-row" style="--i:3">
+      <span class="sq-stage-ic" aria-hidden="true">4</span>
+      <span class="sq-stage-body">
+        <span class="sq-stage-label">Score dimensions</span>
+        <span class="sq-stage-sub">Skills, depth, constraints, seniority</span>
+      </span>
+      <span class="sq-stage-state">queued</span>
+    </li>
+    <li class="sq-stage stage-row" style="--i:4">
+      <span class="sq-stage-ic" aria-hidden="true">5</span>
+      <span class="sq-stage-body">
+        <span class="sq-stage-label">Deep Read judge</span>
+        <span class="sq-stage-sub">Evidence-level evaluation of the top profiles</span>
+      </span>
+      <span class="sq-stage-state">queued</span>
+    </li>
+    <li class="sq-stage stage-row" style="--i:5">
+      <span class="sq-stage-ic" aria-hidden="true">6</span>
+      <span class="sq-stage-body">
+        <span class="sq-stage-label">Rank shortlist</span>
+        <span class="sq-stage-sub">Calibrating the final order</span>
+      </span>
+      <span class="sq-stage-state">queued</span>
+    </li>
+  </ul>
+
+  <p class="sr-only" role="status" id="srStatus">Step 3 of 6</p>
+
+  <div class="mt-8 text-center">
+    <button type="button" class="btn-link press">Cancel and go back</button>
+  </div>
+</section>
+
+<div class="demo-note">Demo preview — search loading (stages animate live)</div>
+
+<script>
+  // Mirrors the production clock: 1.6s per stage, plausible progress,
+  // parks at a high-water mark rather than pretending to finish.
+  var STAGES = document.querySelectorAll("#stageList .sq-stage");
+  var fill = document.getElementById("progressFill");
+  var elapsedEl = document.getElementById("elapsed");
+  var sr = document.getElementById("srStatus");
+  var stage = 2, ticks = 0, t0 = Date.now();
+
+  setInterval(function () {
+    ticks++;
+    var secs = Math.floor((Date.now() - t0) / 1000);
+    elapsedEl.textContent = secs < 60 ? secs + "s elapsed" : Math.floor(secs / 60) + "m " + (secs % 60) + "s elapsed";
+    if (stage < STAGES.length - 1) {
+      STAGES[stage].classList.remove("is-active");
+      STAGES[stage].querySelector(".sq-stage-ic").textContent = "✓";
+      STAGES[stage].querySelector(".sq-stage-state").className = "sq-stage-state";
+      STAGES[stage].querySelector(".sq-stage-state").textContent = "done";
+      stage++;
+      STAGES[stage].classList.add("is-active");
+      STAGES[stage].querySelector(".sq-stage-ic").textContent = String(stage + 1);
+      STAGES[stage].querySelector(".sq-stage-state").className = "sq-stage-state is-running";
+      STAGES[stage].querySelector(".sq-stage-state").textContent = "running";
+      sr.textContent = "Step " + (stage + 1) + " of " + STAGES.length;
+    }
+    var progress = stage >= STAGES.length - 1
+      ? Math.min(92, 70 + ticks * 3)
+      : Math.round(((stage + 0.6) / STAGES.length) * 100);
+    fill.style.width = progress + "%";
+  }, 1600);
+</script>
+</body>
+</html>
